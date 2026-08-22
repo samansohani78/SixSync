@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -40,6 +41,27 @@ func newFakeGateway() *fakeGateway {
 	}}
 }
 
+// replace stores a resource, as a PUT would.
+func (f *fakeGateway) replace(kind, id string, body map[string]any) {
+	for i, v := range f.resources[kind] {
+		if v["id"] == id {
+			f.resources[kind][i] = body
+			return
+		}
+	}
+	f.resources[kind] = append(f.resources[kind], body)
+}
+
+// remove deletes a resource, as a DELETE would.
+func (f *fakeGateway) remove(kind, id string) {
+	for i, v := range f.resources[kind] {
+		if v["id"] == id {
+			f.resources[kind] = append(f.resources[kind][:i], f.resources[kind][i+1:]...)
+			return
+		}
+	}
+}
+
 func (f *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Server", "APISIX/3.18.0")
 	w.Header().Set("X-API-VERSION", "v3")
@@ -65,9 +87,48 @@ func (f *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.Method == http.MethodPut {
+		f.writes++
+		kind := strings.TrimPrefix(path.Dir(strings.TrimPrefix(r.URL.Path, "/apisix/admin/")), ".")
+		id := path.Base(r.URL.Path)
+		body := map[string]any{}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		body["id"] = id
+		f.replace(kind, id, body)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"key": "/apisix/" + kind + "/" + id, "value": body,
+		})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		f.writes++
+		kind := strings.TrimPrefix(path.Dir(strings.TrimPrefix(r.URL.Path, "/apisix/admin/")), ".")
+		f.remove(kind, path.Base(r.URL.Path))
+		_ = json.NewEncoder(w).Encode(map[string]any{"deleted": "1"})
+		return
+	}
+
 	if r.Method != http.MethodGet {
 		f.writes++
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	// A single-resource read.
+	if seg := strings.TrimPrefix(r.URL.Path, "/apisix/admin/"); strings.Count(seg, "/") == 1 {
+		kind, id := path.Dir(seg), path.Base(seg)
+		for i, v := range f.resources[kind] {
+			if v["id"] == id {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"key": "/apisix/" + kind + "/" + id, "value": v,
+					"createdIndex": 10, "modifiedIndex": 20 + i,
+				})
+				return
+			}
+		}
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Key not found"}`)
 		return
 	}
 

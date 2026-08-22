@@ -85,7 +85,8 @@ func NewRootCommand(out, errOut io.Writer) *cobra.Command {
 		Short: "GitOps for Apache APISIX, through the Admin API",
 		Long: "SixSync manages Apache APISIX configuration declaratively through the\n" +
 			"Admin API, with Git as the source of truth.\n\n" +
-			"This build is read-only: no command changes remote state.\n\n" +
+			"Only `apply` and `rollback` change remote state, and both require explicit\n" +
+			"approval. Everything else is read-only.\n\n" +
 			"SixSync is a community project. It is not affiliated with or endorsed by\n" +
 			"the Apache Software Foundation.",
 		SilenceUsage:  true,
@@ -123,6 +124,8 @@ func NewRootCommand(out, errOut io.Writer) *cobra.Command {
 		newLintCommand(e),
 		newValidateCommand(e),
 		newPlanCommand(e),
+		newApplyCommand(e),
+		newRollbackCommand(e),
 	)
 	return root
 }
