@@ -3,7 +3,6 @@ package plan
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/samansohani78/SixSync/internal/policy"
@@ -118,21 +117,4 @@ func Render(w io.Writer, p *Plan) {
 // Denied reports whether policy blocks this plan.
 func (c Content) Denied() bool {
 	return c.Policy != nil && c.Policy.Outcome == policy.OutcomeDeny
-}
-
-// Applicable reports whether the plan could be applied as-is.
-func (c Content) Applicable() bool {
-	return len(c.Blocked()) == 0 && !c.Denied()
-}
-
-// SortedUnmanaged returns unmanaged resources in a stable order.
-func (c Content) SortedUnmanaged() []Unmanaged {
-	out := append([]Unmanaged(nil), c.Unmanaged...)
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Kind != out[j].Kind {
-			return out[i].Kind < out[j].Kind
-		}
-		return out[i].ID < out[j].ID
-	})
-	return out
 }

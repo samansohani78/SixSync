@@ -65,16 +65,3 @@ func (c *Client) Delete(ctx context.Context, d model.Definition, id string) erro
 	_, err := c.do(ctx, "DELETE", path, nil, nil)
 	return err
 }
-
-// Exists reports whether a resource is present.
-func (c *Client) Exists(ctx context.Context, d model.Definition, id string) (bool, error) {
-	_, err := c.Get(ctx, d, id)
-	switch {
-	case err == nil:
-		return true, nil
-	case IsKind(err, ErrNotFound):
-		return false, nil
-	default:
-		return false, err
-	}
-}

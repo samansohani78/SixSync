@@ -10,17 +10,27 @@ internal/
   apisix/              Admin API client: transport, envelope, errors, probing
   model/               the kind registry — all per-kind knowledge
   resource/            on-disk format, repository loading, atomic writes
-  canonical/           per-kind normalization and deterministic digests
+  canonical/           per-kind normalization, digests, field diffs
+  depgraph/            reference ordering and blast radius
+  plan/                the plan artifact: building, sealing, rendering
+  policy/              configurable organizational rules
+  apply/               the only package that changes remote state
+  journal/             the execution record apply writes and rollback reads
   lintrules/           repository checks that need no gateway
   redact/              path-aware redaction
   buildinfo/           version metadata injected at link time
   exitcode/            the exit-code contract
 test/integration/      behind the `integration` build tag
+test/perf/             behind the `perf` build tag
 deploy/compose/        a disposable APISIX, pinned to an exact version
 ```
 
-Dependencies point one way: `cli` → everything, `model` → `redact`, and nothing
-imports `cli`. Only `cmd` knows the process can exit.
+Dependencies point one way: `cli` → everything, and nothing imports `cli`. Only
+`cmd` knows the process can exit.
+
+`policy` does not import `plan`. It reasons about a narrow `Change` type that
+`plan` projects into, so the two can be tested independently and a change to
+the plan artifact does not ripple into policy rules.
 
 ## The kind registry
 
@@ -128,6 +138,34 @@ Codes `3`, `4` and `5` are reserved and documented but unused, so a future
 command cannot claim a number that pipelines already read as meaning something
 else.
 
+## The write path
+
+`internal/apply` is the only package that changes remote state, and it is
+deliberately the smallest interesting package in the tree. It takes a plan it
+did not build, checks a fixed list of preconditions, and executes operations in
+the order the plan gave them.
+
+The checks run to completion before the first write, so a plan that fails any
+of them leaves the gateway untouched:
+
+1. The plan's digest matches its content.
+2. Nothing in the plan is blocked, and policy did not deny it.
+3. The plan was built for this gateway, with this credential.
+4. Every affected resource is still at the revision the plan recorded.
+
+Then each operation runs, and each is verified by reading the resource back.
+The first unrecoverable failure stops the run.
+
+What this is not is atomic. APISIX has no transaction across resources, so a
+failure partway leaves some changes applied and some not. The journal records
+exactly what happened, and `rollback` reads it. Neither the code nor the help
+text claims otherwise.
+
+The journal is synced after every entry. That costs a syscall per mutation,
+which is nothing next to an Admin API round trip, and it is the difference
+between a usable record and an empty file when the process dies — which is the
+failure the journal exists for.
+
 ## What is deliberately absent
 
 **No plugin system.** Extension points are for problems you have.
@@ -138,5 +176,6 @@ hypothetical second one would be shaped by guesses.
 **No telemetry, no update check, no crash reporting.** A tool holding gateway
 credentials makes no outbound connection the operator did not ask for.
 
-**No write path.** Not stubbed, not partially present. `plan` and `apply` do not
-exist as commands, so no one can discover them half-built and assume they work.
+**No speculative API.** An exported function nothing calls is untested surface
+that a later reader assumes is load-bearing. Several were removed rather than
+left in place for a hypothetical caller.
