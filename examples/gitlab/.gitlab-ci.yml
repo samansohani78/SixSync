@@ -34,6 +34,8 @@
 stages:
   - validate
   - verify
+  - plan
+  - deploy
 
 default:
   image: golang:1.27
@@ -109,16 +111,80 @@ scheduled-drift:
     - if: $CI_PIPELINE_SOURCE == "schedule"
 
 # ---------------------------------------------------------------------------
-# When SixSync gains an apply command, the deployment job belongs here and
-# should carry all of:
+# Produces the plan a human reviews. Read-only, but it needs a key that may
+# use POST if you also want remote schema validation.
 #
-#   environment:
-#     name: production          # a Protected Environment with approvers
-#   resource_group: production  # serializes deploys so two cannot interleave
-#   when: manual                # a human decides
-#   rules:
-#     - if: $CI_COMMIT_REF_PROTECTED == "true"
+# The plan is kept as an artifact and passed to the deploy job, so the change
+# that gets approved is exactly the change that gets applied — apply refuses
+# any other plan, and refuses one whose digest does not match its content.
+# ---------------------------------------------------------------------------
+plan:
+  stage: plan
+  variables:
+    SIXSYNC_ADMIN_URL: $SIXSYNC_ADMIN_URL
+    SIXSYNC_ADMIN_KEY: $SIXSYNC_VIEWER_KEY
+  script:
+    - sixsync plan --repo-dir . --out plan.json --policy policies/production.yaml
+  artifacts:
+    paths:
+      - plan.json
+    expire_in: 7 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# The only job that changes anything.
 #
-# plus the administrator key rather than the viewer key, and a runner that is
-# protected and locked to this project.
+# `environment` ties it to a Protected Environment, so GitLab enforces approval
+# and records the deployment. `resource_group` serializes deploys, so two
+# pipelines cannot interleave writes against one gateway. `when: manual` means
+# a person decides.
+#
+# apply re-reads every affected resource before its first write and abandons
+# the run if anything moved since the plan, so a stale plan cannot be applied
+# even if it sat in the artifact store for a while.
+#
+# The journal is kept regardless of outcome: it is what `sixsync rollback`
+# reads, and what a person reads when a partial failure needs untangling.
+# ---------------------------------------------------------------------------
+deploy:
+  stage: deploy
+  needs: ["plan"]
+  variables:
+    SIXSYNC_ADMIN_URL: $SIXSYNC_ADMIN_URL
+    SIXSYNC_ADMIN_KEY: $SIXSYNC_ADMIN_KEY
+  environment:
+    name: production
+  resource_group: production
+  when: manual
+  script:
+    - sixsync apply --plan plan.json --repo-dir .
+        --journal journal.jsonl --approve
+  after_script:
+    # Confirm the gateway now matches the repository.
+    - SIXSYNC_ADMIN_KEY=$SIXSYNC_VIEWER_KEY sixsync drift --repo-dir . || true
+  artifacts:
+    when: always
+    paths:
+      - journal.jsonl
+    expire_in: 90 days
+  rules:
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+
+# ---------------------------------------------------------------------------
+# Deletions need their own approval, so they get their own job rather than
+# being folded into the ordinary deploy path. Add --approve-delete only when
+# the plan's deletions have been reviewed specifically.
+#
+#   script:
+#     - sixsync apply --plan plan.json --repo-dir . --journal journal.jsonl
+#         --approve --approve-delete
+#
+# Rolling back uses the journal the deploy job kept:
+#
+#   sixsync rollback --journal journal.jsonl
+#
+# Rollback refuses if anything changed after the apply, rather than
+# overwriting work done since. It cannot restore credentials, because journals
+# are redacted — those come back as manual steps.
 # ---------------------------------------------------------------------------

@@ -76,6 +76,22 @@ jobs:
         with:
           version: latest
 
+  fuzz-smoke:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # A short run on every push: long enough to catch a regression that
+      # breaks a seed, short enough not to hold up a pull request. The seed
+      # corpus is checked in, so previously-found inputs always re-run.
+      - name: Fuzz
+        run: make fuzz FUZZTIME=20s
+
   vulncheck:
     name: Vulnerability scan
     runs-on: ubuntu-latest
@@ -97,7 +113,7 @@ jobs:
       matrix:
         # Exact versions only. A floating tag would make a green run
         # meaningless, because it would not say what it was green against.
-        apisix: ["3.18.0"]
+        apisix: ["3.16.0", "3.17.0", "3.18.0"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -105,15 +121,10 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
-      - name: Start a disposable APISIX
-        run: make env-up
-
-      - name: Seed synthetic resources
-        run: ./scripts/seed-test-gateway.sh
-
-      - name: Run integration tests
-        run: make test-integration
+      - name: Run the integration suite against APISIX ${{ matrix.apisix }}
+        run: ./scripts/compat-matrix.sh ${{ matrix.apisix }}
 
       - name: Tear down
         if: always()
-        run: make env-down
+        run: docker compose -p sixsync-compat-$(echo "${{ matrix.apisix }}" | tr . -) \
+               -f deploy/compose/docker-compose.yml down -v || true

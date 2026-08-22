@@ -1,0 +1,12 @@
+# Default owner for everything.
+* @samansohani78
+
+# Changes to these alter a public contract or a safety property, so they
+# warrant a closer look than ordinary code.
+/internal/apply/        @samansohani78
+/internal/plan/         @samansohani78
+/internal/redact/       @samansohani78
+/internal/exitcode/     @samansohani78
+/.github/workflows/     @samansohani78
+/.goreleaser.yaml       @samansohani78
+/docs/decisions/        @samansohani78
