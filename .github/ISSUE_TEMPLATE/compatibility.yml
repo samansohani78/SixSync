@@ -1,0 +1,29 @@
+name: APISIX compatibility
+description: SixSync behaves differently against a particular APISIX version
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Compatibility claims in this project are backed by tests against pinned
+        images, so a report here usually turns into a new case in
+        `test/integration/compat_test.go`.
+
+  - type: input
+    id: apisix-version
+    attributes:
+      label: APISIX version
+      description: The exact release, e.g. 3.17.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: difference
+    attributes:
+      label: What differs
+      description: |
+        The request, the response you observed, and what you expected.
+        Synthetic values only.
+      render: shell
+    validations:
+      required: true

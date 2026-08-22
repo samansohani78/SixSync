@@ -119,6 +119,17 @@ fuzz:
 
 FUZZTIME ?= 30s
 
+# --- Release ----------------------------------------------------------------
+# A dry run only. Publishing happens in CI, on a tag.
+
+.PHONY: release-snapshot
+release-snapshot:
+	goreleaser release --snapshot --clean --skip=sign,publish
+
+.PHONY: release-check
+release-check:
+	goreleaser check
+
 .PHONY: clean
 clean:
 	rm -rf dist coverage.out

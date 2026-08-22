@@ -1,0 +1,131 @@
+# Release configuration for SixSync.
+#
+# Nothing here publishes on its own; releases are cut by the GitHub Actions
+# workflow in .github/workflows/release.yml, which runs on a tag.
+#
+# Verify changes locally with `make release-snapshot`, which builds every
+# target and produces checksums and SBOMs without touching a remote.
+version: 2
+
+project_name: sixsync
+
+before:
+  hooks:
+    - go mod tidy
+    - go mod verify
+
+builds:
+  - id: sixsync
+    main: ./cmd/sixsync
+    binary: sixsync
+    env:
+      # A static binary runs in a scratch container and on a runner whose libc
+      # does not match the build host's.
+      - CGO_ENABLED=0
+    flags:
+      # -trimpath removes local filesystem paths from the binary, which is
+      # both a privacy matter and a prerequisite for reproducible builds.
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X github.com/samansohani78/SixSync/internal/buildinfo.version={{.Version}}
+      - -X github.com/samansohani78/SixSync/internal/buildinfo.commit={{.FullCommit}}
+      - -X github.com/samansohani78/SixSync/internal/buildinfo.date={{.CommitDate}}
+    # CommitDate rather than the build time: the same commit must produce the
+    # same binary, and a wall-clock timestamp would break that.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+
+archives:
+  - id: sixsync
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - README.md
+      - LICENSE
+      - NOTICE
+      - docs/**/*
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+sboms:
+  # One SBOM per archive, so a consumer can check exactly what they downloaded.
+  - id: archive
+    artifacts: archive
+
+# Keyless signing via the GitHub Actions OIDC token. No long-lived key exists
+# to leak or rotate; the certificate is short-lived and the signature is
+# recorded in the public transparency log.
+signs:
+  - id: cosign
+    cmd: cosign
+    signature: "${artifact}.sig"
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - "--output-signature=${signature}"
+      - "--output-certificate=${certificate}"
+      - "${artifact}"
+      - "--yes"
+    artifacts: checksum
+    output: true
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
+
+changelog:
+  use: github
+  sort: asc
+  groups:
+    - title: Features
+      regexp: '^feat'
+      order: 0
+    - title: Fixes
+      regexp: '^fix'
+      order: 1
+    - title: Security
+      regexp: '^sec'
+      order: 2
+    - title: Other
+      order: 99
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+
+release:
+  draft: true
+  prerelease: auto
+  header: |
+    ## SixSync {{ .Version }}
+
+    SixSync is a community project. It is not affiliated with or endorsed by
+    the Apache Software Foundation. Apache APISIX and Apache are trademarks of
+    the ASF.
+  footer: |
+    ### Verifying a download
+
+    ```bash
+    # Checksums
+    sha256sum -c checksums.txt --ignore-missing
+
+    # Signature, via the transparency log
+    cosign verify-blob checksums.txt \
+      --signature checksums.txt.sig \
+      --certificate checksums.txt.pem \
+      --certificate-identity-regexp 'https://github.com/samansohani78/SixSync/.*' \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com
+    ```
+
+    ### Supported Apache APISIX versions
+
+    See [docs/compatibility.md](docs/compatibility.md) for the tested matrix
+    and the differences between releases.

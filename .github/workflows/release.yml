@@ -1,0 +1,60 @@
+# Cuts a SixSync release from a tag.
+#
+# Every action is pinned to a full commit SHA. A tag is mutable: whoever can
+# move it can change what runs here, which is how the tj-actions compromise
+# reached tens of thousands of repositories.
+#
+# Releases are created as drafts. Nothing is published until a person reviews
+# the artifacts and presses the button.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: Build and sign
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the draft release and upload artifacts.
+      contents: write
+      # Needed for keyless signing: cosign exchanges this token for a
+      # short-lived certificate, so no long-lived key exists to leak.
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # GoReleaser derives the changelog from history.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.27.0"
+
+      # A release must not be cut from code that does not pass its own tests.
+      - name: Test
+        run: go test -race ./...
+
+      - name: Vulnerability scan
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
+      - name: Install syft for SBOM generation
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

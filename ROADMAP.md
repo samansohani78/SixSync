@@ -20,7 +20,7 @@ Demonstrated:
 
 Not done: mutation of any kind.
 
-## M2 — Planning · `v0.2.0`
+## M2 — Planning · **complete**
 
 **Goal:** produce a reviewable artifact describing what would change, without
 changing anything.
@@ -31,16 +31,20 @@ changing anything.
 - Route collision detection
 - `--detailed-exitcode` on `plan`
 
-**Done when:**
+**Demonstrated:**
 
-- the same inputs and remote state produce byte-identical plan JSON, proven by
-  a golden test
+- the same inputs and state produce a byte-identical artifact and digest,
+  across repeated runs and at 1,000 resources
+- runtime metadata is outside the hashed content, so it cannot disturb it
 - a plan records `modifiedIndex` and a canonical digest per affected resource
-- changing a plugin config referenced by 20 routes reports all 20
-- two routes with identical match criteria are reported before apply
-- a plan containing a deletion is visibly marked as such
+- a shared plugin config change reports every route it reaches, directly and
+  transitively
+- blocked operations — dangling references, unsupported kinds, uncomparable
+  shapes — make a plan visibly unapplicable rather than being omitted
 
-## M3 — Apply · `v0.3.0`
+Not done: route collision detection, which is deferred to M5.
+
+## M3 — Apply · **complete**
 
 **Goal:** the first write path. The milestone where being wrong causes an
 outage, so the bar is correspondingly higher.
@@ -52,18 +56,20 @@ outage, so the bar is correspondingly higher.
 - Pre-change journal
 - `rollback` from a journal, best-effort and honest about it
 
-**Done when:**
+**Demonstrated:**
 
-- applying an unchanged repository issues **zero** write requests, verified by
-  counting them — a redundant write advances `modifiedIndex` and is real churn
-- a plan built against state that has since moved is refused with exit code 3
-- an injected mid-apply failure restores prior state in an integration test, and
-  reports exit code 5 when it cannot
-- deletion without `lifecycle.state: absent` is impossible, asserted by test
+- applying an unchanged repository issues zero writes, asserted against both a
+  fake and a real gateway by comparing `modifiedIndex` before and after
+- a plan built against state that has since moved is refused with exit code 3,
+  verified against a live APISIX with a genuine concurrent write
+- failure injected at every operation boundary leaves rollback able to remove
+  what was created
+- deletion requires a tombstone *and* `--approve-delete`
 - `?force=true` is never sent
-- applying to a viewer key fails before the first write, not partway through
+- a tampered plan, a plan for another gateway, and a plan built with another
+  credential are all refused before the first write
 
-## M4 — Compatibility and hardening · `v0.4.0`
+## M4 — Compatibility and hardening · **complete**
 
 - APISIX 3.16 and 3.17 in the integration matrix
 - Consumer support, only if credentials can be handled without writing plaintext
@@ -72,16 +78,25 @@ outage, so the bar is correspondingly higher.
 - Behaviour at 5,000 resources
 - Signed releases, checksums, SBOM
 
-**Done when:**
+**Demonstrated:**
 
-- the integration suite passes on 3.16.0, 3.17.0 and 3.18.0, with any divergence
-  documented in `compatibility.md`
-- `plan` over 5,000 resources completes within a stated budget on stated hardware
-- no high-severity `govulncheck` finding at release
-- either consumers are supported with no plaintext credential in Git, or the
-  refusal is documented as permanent
+- the integration suite passes on 3.16.0, 3.17.0 and 3.18.0 — 38 tests each —
+  with both divergences documented and encoded as version-aware expectations
+- `plan` over 5,000 resources completes in 138 ms with a 17 MiB peak heap
+- fuzz targets cover every parser and canonicalizer; two real redaction
+  bypasses and a path-traversal-shaped identifier were found and fixed
+- `govulncheck` reports nothing
+- releases are reproducible, checksummed, SBOM'd and keyless-signed
 
-## M5 — v1.0
+Consumers remain unsupported. See the non-goals below.
+
+## M5 — v1.0 · in progress
+
+Remaining: route collision detection, a documented migration path exercised in
+practice, external security review, and a production adopter other than the
+author.
+
+
 
 - Stable resource format, exit codes, plan and journal schemas
 - A documented migration path from `v1alpha1`
@@ -90,6 +105,20 @@ outage, so the bar is correspondingly higher.
 
 **Done when:** each of the above is true. The last item is not a formality — a
 tool this consequential should not declare 1.0 on the author's own use alone.
+
+## Deliberate non-goals
+
+**Consumers, Credentials, SSL, Secrets.** APISIX enables `data_encryption` by
+default and decrypts `encrypt_fields` when serving a read, so
+`GET /apisix/admin/consumers/{name}` returns plaintext credentials. Importing
+them would write live secrets into Git. SSL objects cannot round-trip at all,
+because APISIX strips the private key on read — and on 3.16.0 it returns that
+key encrypted under a keyring whose default values are published.
+
+These kinds are recognized and refused by name with a reason, never silently
+skipped, and the refusal has test coverage. Revisiting this requires a design
+where the secret never enters the repository — most plausibly by managing only
+`$secret://` and `$env://` references.
 
 ## Explicitly not planned
 

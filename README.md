@@ -5,9 +5,10 @@ GitOps for Apache APISIX, through the Admin API.
 SixSync manages APISIX configuration declaratively, with Git as the source of
 truth, for teams running APISIX on VMs or bare metal rather than Kubernetes.
 
-> **This build is read-only.** No command changes remote state. Mutation
-> (`plan`, `apply`, `rollback`) is planned but not implemented — see
-> [ROADMAP.md](ROADMAP.md).
+> **Status: pre-1.0.** The full workflow is implemented and tested —
+> `plan`, `apply` and `rollback` included — but the file and artifact formats
+> may still change between minor releases, with migration notes. See
+> [docs/versioning.md](docs/versioning.md).
 
 > SixSync is a community project. It is **not** affiliated with, endorsed by,
 > or sponsored by the Apache Software Foundation. Apache, Apache APISIX and
@@ -62,16 +63,39 @@ sixsync lint --repo-dir ./gateway
 sixsync drift --repo-dir ./gateway
 ```
 
+Then, when you want to change something:
+
+```bash
+# Work out what would change. Nothing is touched.
+sixsync plan --repo-dir ./gateway --out plan.json
+
+# A human reads plan.json. Then:
+sixsync apply --plan plan.json --repo-dir ./gateway   --journal journal.jsonl --approve
+
+# If it goes wrong:
+sixsync rollback --journal journal.jsonl
+```
+
+`apply` refuses to run without `--approve`, refuses a plan built against
+different state, refuses a plan whose digest does not match its content, and
+refuses a plan built for a different gateway. Deletions need `--approve-delete`
+on top.
+
 ## Commands
 
-| Command | What it does | Needs an endpoint |
+| Command | What it does | Changes the gateway |
 | --- | --- | --- |
 | `version` | Version, commit, build date, Go version | no |
-| `doctor` | Reachability, TLS, authentication, key capability, APISIX version | yes |
-| `import` | Read live resources into files, preserving identifiers | yes |
-| `lint` | Check the repository on its own | no |
-| `validate` | Structural checks; `--remote` also uses APISIX's schemas | optional |
-| `drift` | Compare the repository with live state | yes |
+| `doctor` | Reachability, TLS, authentication, key capability, APISIX version | no |
+| `import` | Read live resources into files, preserving identifiers | no |
+| `lint` | Check the repository on its own — no endpoint, no credential | no |
+| `validate` | Structural checks; `--remote` also uses APISIX's schemas | no |
+| `drift` | Compare the repository with live state | no |
+| `plan` | Produce a deterministic, reviewable plan artifact | no |
+| `apply` | Execute a plan, behind explicit approval | **yes** |
+| `rollback` | Restore what an apply changed, from its journal | **yes** |
+
+See [docs/cli-reference.md](docs/cli-reference.md) for full usage.
 
 ## Configuration
 
@@ -140,10 +164,17 @@ are never silently skipped.
 
 ## Compatibility
 
-Developed and tested against **Apache APISIX 3.18.0**. Behaviour was verified
-against a running instance rather than inferred from documentation — including
-several points where the two disagree. See
-[docs/compatibility.md](docs/compatibility.md).
+| APISIX | Integration suite |
+| --- | --- |
+| 3.18.0 | 38/38 pass |
+| 3.17.0 | 38/38 pass |
+| 3.16.0 | 38/38 pass |
+
+Behaviour is verified against running instances rather than inferred from
+documentation — including several points where the two disagree, and two
+genuine differences between these releases. See
+[docs/compatibility.md](docs/compatibility.md). Run it yourself with
+`make compat-matrix`.
 
 ## Relationship to ADC
 
@@ -173,7 +204,11 @@ them at a throwaway instance only.
 - [docs/compatibility.md](docs/compatibility.md) — observed APISIX behaviour
 - [docs/security-model.md](docs/security-model.md)
 - [docs/resource-format.md](docs/resource-format.md)
+- [docs/cli-reference.md](docs/cli-reference.md) — every command and flag
+- [docs/policy-reference.md](docs/policy-reference.md) — policy profiles
+- [docs/versioning.md](docs/versioning.md) — what counts as a breaking change
 - [docs/research.md](docs/research.md) — sources
+- [docs/vendored-docs-audit.md](docs/vendored-docs-audit.md)
 - [docs/decisions/](docs/decisions/) — architecture decision records
 
 ## License
