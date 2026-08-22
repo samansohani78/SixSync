@@ -58,6 +58,10 @@ func Check(repo *resource.Repo) []Finding {
 
 	out = append(out, checkDuplicateIDs(repo)...)
 	out = append(out, checkReferences(repo)...)
+	out = append(out, checkRouteCollisions(repo)...)
+	out = append(out, checkFilenameCollisions(repo)...)
+	out = append(out, checkCaseOnlyIDs(repo)...)
+	out = append(out, checkUncomparable(repo)...)
 
 	for _, l := range repo.Resources {
 		out = append(out, checkOneFile(l)...)

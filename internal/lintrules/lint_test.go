@@ -256,3 +256,200 @@ func TestUnparseableFilesAreReportedSeparately(t *testing.T) {
 		t.Errorf("the readable file should still load, got %d resources", len(repo.Resources))
 	}
 }
+
+// --- collision rules -------------------------------------------------------
+
+// Two routes matching the same requests is a silent problem: APISIX picks one
+// by an ordering the repository does not state.
+func TestRouteCollisionIsFlagged(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  methods: [POST]\n  upstream_id: u1\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  methods: [POST]\n  upstream_id: u1\n"),
+	})
+
+	got := findingsFor(Check(repo), RuleRouteCollision)
+	if len(got) != 2 {
+		t.Fatalf("expected both routes flagged, got %d: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Message, "r2") && !strings.Contains(got[0].Message, "r1") {
+		t.Errorf("the message should name the colliding route: %s", got[0].Message)
+	}
+	// The remedy should be stated, not just the problem.
+	if !strings.Contains(got[0].Message, "priorit") {
+		t.Errorf("the message should suggest a fix: %s", got[0].Message)
+	}
+}
+
+// Different priorities mean the ordering was chosen deliberately.
+func TestRoutesAtDifferentPrioritiesDoNotCollide(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  methods: [POST]\n  priority: 10\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  methods: [POST]\n  priority: 20\n"),
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("routes at different priorities were flagged: %+v", got)
+	}
+}
+
+func TestRoutesWithDifferentMethodsDoNotCollide(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  methods: [GET]\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  methods: [POST]\n"),
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("routes with disjoint methods were flagged: %+v", got)
+	}
+}
+
+func TestRoutesOnDifferentHostsDoNotCollide(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  host: a.example.test\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  host: b.example.test\n"),
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("routes on different hosts were flagged: %+v", got)
+	}
+}
+
+// A route with no method list matches every method, which is a wider net than
+// any explicit list — so the two are not the same match.
+func TestAbsentMethodListIsNotTheSameAsAnExplicitOne(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  methods: [POST]\n"),
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("an unrestricted route was treated as colliding with a restricted one: %+v", got)
+	}
+}
+
+// Warning about a collision that does not exist is worse than staying quiet,
+// so routes narrowed by something this rule cannot compare are skipped.
+func TestRoutesNarrowedByVarsAreNotFlagged(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  vars:\n  - [\"arg_v\", \"==\", \"1\"]\n"),
+		"routes/b.yaml": route("r2", "  uri: /pay\n  vars:\n  - [\"arg_v\", \"==\", \"2\"]\n"),
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("routes narrowed by vars were flagged: %+v", got)
+	}
+}
+
+// A tombstoned route is on its way out and cannot collide with anything.
+func TestTombstonedRoutesDoNotCollide(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /pay\n  methods: [POST]\n"),
+		"routes/b.yaml": "apiVersion: sixsync/v1alpha1\nkind: Route\nmetadata:\n  id: r2\n" +
+			"lifecycle:\n  state: absent\n  reason: retired\n",
+	})
+	if got := findingsFor(Check(repo), RuleRouteCollision); len(got) != 0 {
+		t.Errorf("a tombstoned route was flagged as colliding: %+v", got)
+	}
+}
+
+// import derives file names from resources, so a collision means one would
+// overwrite the other on the next import.
+func TestFilenameCollisionIsAnError(t *testing.T) {
+	// Two ids that slug to the same token.
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("pay-export", "  uri: /a\n"),
+		"routes/b.yaml": route("pay.export", "  uri: /b\n"),
+	})
+
+	got := findingsFor(Check(repo), RuleFilenameCollision)
+	if len(got) != 2 {
+		t.Fatalf("expected both flagged, got %d: %+v", len(got), got)
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("severity = %s; one file silently overwriting another is an error",
+			got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "overwrite") {
+		t.Errorf("the consequence should be stated: %s", got[0].Message)
+	}
+}
+
+func TestDistinctFilenamesAreNotFlagged(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("route-one", "  uri: /a\n"),
+		"routes/b.yaml": route("route-two", "  uri: /b\n"),
+	})
+	if got := findingsFor(Check(repo), RuleFilenameCollision); len(got) != 0 {
+		t.Errorf("distinct file names were flagged: %+v", got)
+	}
+}
+
+// APISIX treats these as separate resources; a case-insensitive filesystem
+// does not.
+func TestCaseOnlyIdentifierDifferenceIsFlagged(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("PayExport", "  uri: /a\n"),
+		"routes/b.yaml": route("payexport", "  uri: /b\n"),
+	})
+
+	got := findingsFor(Check(repo), RuleCaseOnlyID)
+	if len(got) != 2 {
+		t.Fatalf("expected both flagged, got %d: %+v", len(got), got)
+	}
+	if !strings.Contains(got[0].Message, "macOS") && !strings.Contains(got[0].Message, "Windows") {
+		t.Errorf("the message should explain where this breaks: %s", got[0].Message)
+	}
+}
+
+// Identical identifiers are the duplicate-id rule's business, not this one.
+func TestIdenticalIdentifiersAreNotACaseCollision(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"routes/a.yaml": route("same", "  uri: /a\n"),
+		"routes/b.yaml": route("same", "  uri: /b\n"),
+	})
+	if got := findingsFor(Check(repo), RuleCaseOnlyID); len(got) != 0 {
+		t.Errorf("identical ids were reported as a case collision: %+v", got)
+	}
+	if got := findingsFor(Check(repo), RuleDuplicateID); len(got) != 2 {
+		t.Errorf("the duplicate-id rule should have caught this instead: %+v", got)
+	}
+}
+
+// A resource the canonicalizer refuses cannot be diffed, so drift and plan
+// would be quietly wrong about it.
+func TestUncomparableResourceIsFlagged(t *testing.T) {
+	repo := repoFrom(t, map[string]string{
+		"upstreams/u.yaml": "apiVersion: sixsync/v1alpha1\nkind: Upstream\nmetadata:\n  id: u1\n" +
+			"lifecycle:\n  state: present\nspec:\n  nodes: \"not-a-node-list\"\n",
+	})
+
+	got := findingsFor(Check(repo), RuleUncomparable)
+	if len(got) != 1 {
+		t.Fatalf("expected the uncomparable resource to be flagged: %+v", Check(repo))
+	}
+	if got[0].Severity != SeverityError {
+		t.Errorf("severity = %s, want error", got[0].Severity)
+	}
+	if !strings.Contains(got[0].Message, "drift") {
+		t.Errorf("the consequence should be stated: %s", got[0].Message)
+	}
+}
+
+func TestCollisionRulesAreDeterministic(t *testing.T) {
+	files := map[string]string{}
+	for _, id := range []string{"r5", "r1", "r3", "r2", "r4"} {
+		files["routes/"+id+".yaml"] = route(id, "  uri: /same\n  methods: [POST]\n")
+	}
+	repo := repoFrom(t, files)
+
+	var first string
+	for run := 0; run < 25; run++ {
+		var sb strings.Builder
+		for _, f := range Check(repo) {
+			sb.WriteString(f.Rule + "|" + f.ID + ";")
+		}
+		got := sb.String()
+		if run == 0 {
+			first = got
+			continue
+		}
+		if got != first {
+			t.Fatalf("collision findings varied:\n%s\n%s", first, got)
+		}
+	}
+}

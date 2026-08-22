@@ -1,0 +1,10 @@
+apiVersion: sixsync/v1alpha1
+kind: Route
+metadata:
+  id: collide-b
+lifecycle:
+  state: present
+spec:
+  uri: /v1/collide
+  methods: [POST]
+  upstream_id: known-upstream

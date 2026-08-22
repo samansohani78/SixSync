@@ -86,8 +86,21 @@ sixsync lint [--repo-dir DIR] [--strict]
 Checks the repository on its own — no endpoint, no credential — so it is safe
 on a pull request from a fork. `--strict` treats warnings as failures.
 
-Rules: `duplicate-id`, `invalid-id`, `dangling-reference`, `embedded-lua`,
-`plaintext-secret`, `ephemeral-route`, `deletion-without-reason`.
+Rules:
+
+| Rule | Severity | What it catches |
+| --- | --- | --- |
+| `duplicate-id` | error | Two files claiming the same resource |
+| `filename-collision` | error | Two resources that would import to one file |
+| `invalid-id` | error | An identifier APISIX would reject |
+| `uncomparable-resource` | error | A shape drift and plan cannot compare |
+| `dangling-reference` | warning | A reference no file declares |
+| `route-collision` | warning | Two routes matching the same requests |
+| `case-only-id-difference` | warning | Identifiers a case-insensitive filesystem merges |
+| `embedded-lua` | warning | `script` or `filter_func`, which run as Lua on the gateway |
+| `plaintext-secret` | warning | A value shaped like a credential |
+| `ephemeral-route` | warning | A `ttl`, which makes the route expire on its own |
+| `deletion-without-reason` | warning | A tombstone with no `lifecycle.reason` |
 
 ### `validate`
 

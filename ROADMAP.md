@@ -42,7 +42,7 @@ changing anything.
 - blocked operations — dangling references, unsupported kinds, uncomparable
   shapes — make a plan visibly unapplicable rather than being omitted
 
-Not done: route collision detection, which is deferred to M5.
+Route collision detection landed with the collision rules in lint.
 
 ## M3 — Apply · **complete**
 
@@ -92,9 +92,8 @@ Consumers remain unsupported. See the non-goals below.
 
 ## M5 — v1.0 · in progress
 
-Remaining: route collision detection, a documented migration path exercised in
-practice, external security review, and a production adopter other than the
-author.
+Remaining: a documented migration path exercised in practice, external security
+review, and a production adopter other than the author.
 
 
 
