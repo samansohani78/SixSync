@@ -12,6 +12,8 @@
 package resource
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -114,6 +116,14 @@ func ValidateID(id string) error {
 	if !idPattern.MatchString(id) {
 		return fmt.Errorf("identifier %q contains characters APISIX rejects; "+
 			"allowed are letters, digits, dot, dash and underscore", id)
+	}
+
+	// "." and ".." satisfy APISIX's character rule but name directory entries.
+	// They are meaningless as identifiers and dangerous anywhere a path is
+	// built, so they are refused outright rather than relied on being
+	// neutralised downstream.
+	if id == "." || id == ".." {
+		return fmt.Errorf("identifier %q is a directory reference, not a usable identifier", id)
 	}
 	return nil
 }
@@ -229,10 +239,24 @@ func FileName(f *File) string {
 	}
 	idPart := slug(f.Metadata.ID)
 
-	if base == idPart {
+	// Every character can be stripped by slugging — an identifier of "..", or
+	// a name of only punctuation. A stemless ".yaml" is a hidden file that the
+	// loader then skips, so the resource would silently vanish. Fall back to a
+	// stable derived name instead.
+	if base == "" {
+		base = "resource-" + shortHash(f.Metadata.ID)
+	}
+
+	if base == idPart || idPart == "" {
 		return base + ".yaml"
 	}
 	return base + "-" + idPart + ".yaml"
+}
+
+// shortHash derives a stable token from an identifier that slugs to nothing.
+func shortHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 // nonSlug matches every character not allowed in a generated file name.

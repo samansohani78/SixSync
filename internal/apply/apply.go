@@ -439,17 +439,32 @@ func priorState(op plan.Operation, before observedState) journal.Before {
 		return b
 	}
 
+	// Strip what APISIX will not accept back. It sets create_time, update_time
+	// and the identity field itself, and rejects a write that carries any of
+	// them with `the property is forbidden`. Storing them would make every
+	// rollback of an updated resource fail — which is exactly what happened
+	// before this was fixed.
+	writable := make(map[string]any, len(before.value))
+	for k, v := range before.value {
+		writable[k] = v
+	}
+	if def, ok := model.Lookup(op.Kind); ok {
+		delete(writable, def.IdentityField)
+	}
+	delete(writable, "create_time")
+	delete(writable, "update_time")
+
 	// The journal is written to disk and often kept as a CI artifact, so the
 	// recorded state is redacted. Rollback consequently cannot restore a secret
 	// it was never given, and says so instead of writing a placeholder into the
 	// gateway.
 	policy := model.RedactionPolicy(op.Kind)
-	redacted, ok := policy.Apply(before.value).(map[string]any)
+	redacted, ok := policy.Apply(writable).(map[string]any)
 	if !ok {
 		redacted = map[string]any{}
 	}
 	b.State = redacted
-	b.RedactedFields = redactedPaths(before.value, redacted, nil)
+	b.RedactedFields = redactedPaths(writable, redacted, nil)
 	return b
 }
 

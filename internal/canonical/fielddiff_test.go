@@ -282,3 +282,53 @@ func TestRemovedSubtreesAreDescended(t *testing.T) {
 		}
 	}
 }
+
+// A type change leaves one side composite. Rendering that side whole would
+// serialize every value inside it at the parent's path — the same redaction
+// bypass added and removed subtrees had.
+//
+// Found by FuzzDiffFields.
+func TestTypeChangeDoesNotRenderACompositeWhole(t *testing.T) {
+	observed := mustCanon(t, "Route", `{"plugins":{"key-auth":{"key":"a-real-credential"}}}`)
+	desired := mustCanon(t, "Route", `{"plugins":"replaced-by-a-string"}`)
+
+	changes := DiffFields(observed, desired)
+
+	for _, c := range changes {
+		if strings.Contains(c.Old, "a-real-credential") && c.Path != "plugins.key-auth.key" {
+			t.Errorf("the credential appears at path %q, where redaction cannot match it: %+v",
+				c.Path, c)
+		}
+	}
+
+	got := Redact(changes, prefixRedactor{prefix: "plugins.key-auth.key"})
+	for _, c := range got {
+		if strings.Contains(c.Old, "a-real-credential") || strings.Contains(c.New, "a-real-credential") {
+			t.Errorf("the credential survived redaction at %q: %+v", c.Path, c)
+		}
+	}
+
+	// The replacement value must still be visible.
+	var sawNew bool
+	for _, c := range got {
+		if c.New == "replaced-by-a-string" {
+			sawNew = true
+		}
+	}
+	if !sawNew {
+		t.Errorf("the new value was lost: %+v", got)
+	}
+}
+
+// The reverse direction: a scalar replaced by a composite holding a secret.
+func TestScalarReplacedByCompositeIsDescended(t *testing.T) {
+	observed := mustCanon(t, "Route", `{"plugins":"was-a-string"}`)
+	desired := mustCanon(t, "Route", `{"plugins":{"key-auth":{"key":"brand-new-credential"}}}`)
+
+	changes := DiffFields(observed, desired)
+	for _, c := range changes {
+		if strings.Contains(c.New, "brand-new-credential") && c.Path != "plugins.key-auth.key" {
+			t.Errorf("the credential appears at path %q: %+v", c.Path, c)
+		}
+	}
+}

@@ -760,3 +760,74 @@ func mustDef(t *testing.T, k model.Kind) model.Definition {
 	}
 	return d
 }
+
+// APISIX sets create_time, update_time and the identity field itself, and
+// rejects a write carrying any of them with `the property is forbidden`.
+// Recording them in the journal made every rollback of an updated resource
+// fail against a real gateway; the in-memory fake did not model the rejection,
+// so only the integration suite caught it.
+//
+// This is that regression, pinned at unit level.
+func TestJournalPriorStateOmitsFieldsAPISIXRejects(t *testing.T) {
+	s := newScenario(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /new\n"),
+	}, func(g *fakeGateway) {
+		g.seed(model.KindRoute, "r1", map[string]any{
+			"id": "r1", "uri": "/old",
+			"create_time": 1787430328, "update_time": 1787430328,
+		})
+	})
+
+	if _, err := s.apply(); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	before := s.readJournal().BeforeFor(model.KindRoute, "r1")
+	if before == nil {
+		t.Fatal("no prior state recorded")
+	}
+	for _, forbidden := range []string{"create_time", "update_time", "id"} {
+		if _, present := before.State[forbidden]; present {
+			t.Errorf("the journal recorded %q, which APISIX refuses on write; restoring this "+
+				"state would always fail", forbidden)
+		}
+	}
+	// The actual configuration must still be there.
+	if before.State["uri"] != "/old" {
+		t.Errorf("the prior configuration was lost: %+v", before.State)
+	}
+}
+
+// A gateway that rejects forbidden properties, as APISIX does, must still be
+// rollback-able.
+func TestRollbackAgainstAGatewayThatRejectsServerOwnedFields(t *testing.T) {
+	s := newScenario(t, map[string]string{
+		"routes/a.yaml": route("r1", "  uri: /new\n"),
+	}, func(g *fakeGateway) {
+		g.seed(model.KindRoute, "r1", map[string]any{
+			"id": "r1", "uri": "/original",
+			"create_time": 1787430328, "update_time": 1787430328,
+		})
+	})
+	if _, err := s.apply(); err != nil {
+		t.Fatal(err)
+	}
+
+	// Model APISIX's refusal.
+	s.gw.mutateOnWrite = func(_ model.Kind, _ string, spec map[string]any) map[string]any {
+		for _, forbidden := range []string{"create_time", "update_time"} {
+			if _, present := spec[forbidden]; present {
+				t.Errorf("rollback sent %q, which APISIX rejects", forbidden)
+			}
+		}
+		return spec
+	}
+
+	if _, err := s.rollback(); err != nil {
+		t.Fatalf("rollback: %v", err)
+	}
+	got, _ := s.gw.Get(context.Background(), mustDef(t, model.KindRoute), "r1")
+	if got.Value["uri"] != "/original" {
+		t.Errorf("uri = %v, want /original", got.Value["uri"])
+	}
+}

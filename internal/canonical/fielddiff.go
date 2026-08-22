@@ -101,11 +101,45 @@ func diffValue(path []string, observed, desired any, out *[]FieldChange) {
 		return
 	}
 
-	if render(observed) != render(desired) {
-		*out = append(*out, FieldChange{
-			Path: joinPath(path), Type: ChangeModified,
-			Old: render(observed), New: render(desired),
-		})
+	if render(observed) == render(desired) {
+		return
+	}
+
+	// A type change — a map replaced by a string, say — reaches here with one
+	// side still composite. Rendering that side whole would serialize every
+	// value inside it at the parent's path, which is the same redaction bypass
+	// that added and removed subtrees had: a credential nested in the old
+	// value would appear at a path no secret rule matches.
+	//
+	// Descend each composite side separately instead, so every value keeps a
+	// path the redactor can recognise.
+	if isComposite(observed) || isComposite(desired) {
+		if isComposite(observed) {
+			emitLeaves(path, observed, ChangeRemoved, out)
+		} else if observed != nil {
+			appendLeaf(path, render(observed), ChangeRemoved, out)
+		}
+		if isComposite(desired) {
+			emitLeaves(path, desired, ChangeAdded, out)
+		} else if desired != nil {
+			appendLeaf(path, render(desired), ChangeAdded, out)
+		}
+		return
+	}
+
+	*out = append(*out, FieldChange{
+		Path: joinPath(path), Type: ChangeModified,
+		Old: render(observed), New: render(desired),
+	})
+}
+
+// isComposite reports whether a value has children that need their own paths.
+func isComposite(v any) bool {
+	switch v.(type) {
+	case map[string]any, []any:
+		return true
+	default:
+		return false
 	}
 }
 
