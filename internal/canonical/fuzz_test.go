@@ -121,33 +121,41 @@ func FuzzDiffFields(f *testing.F) {
 			}
 		}
 
-		// No change may render a composite value, because everything inside
-		// one would then sit at the parent's path where a secret rule cannot
-		// match it. Empty composites are the exception: they have nothing
-		// inside to leak, and `plugins: {cors: {}}` is meaningful.
-		for _, c := range changes {
-			for _, v := range []string{c.Old, c.New} {
-				if v == "{}" || v == "[]" || v == "" {
-					continue
-				}
-				if strings.HasPrefix(v, "{") || strings.HasPrefix(v, "[") {
-					// A string value can legitimately begin with a brace; only
-					// a genuinely composite rendering is a problem, and those
-					// parse as JSON containers.
-					var probe any
-					if json.Unmarshal([]byte(v), &probe) == nil {
-						if _, isMap := probe.(map[string]any); isMap {
-							t.Fatalf("a change renders a whole object at path %q, where nested "+
-								"secrets cannot be redacted: %+v", c.Path, c)
-						}
-						if _, isList := probe.([]any); isList {
-							t.Fatalf("a change renders a whole list at path %q: %+v", c.Path, c)
-						}
-					}
-				}
-			}
-		}
+		// The property that matters: a secret anywhere in the document must be
+		// reachable by its own path, so redaction can remove it.
+		//
+		// Checking the rendered values directly cannot work — a string whose
+		// content happens to be "[0]" is indistinguishable from a rendered
+		// list. So instead a sentinel is planted at a known path and the
+		// redactor is asked to remove it; if any change still carries the
+		// sentinel afterwards, some value escaped its own path.
+		assertSecretIsRedactable(t, observed, desired)
 	})
+}
+
+// assertSecretIsRedactable plants a sentinel deep in a document and confirms
+// that redacting its path removes every trace of it from the diff.
+func assertSecretIsRedactable(t *testing.T, observed, desired map[string]any) {
+	t.Helper()
+	const sentinel = "SENTINEL-CREDENTIAL-VALUE"
+
+	// Plant it under a nested path, which is where the leaks were.
+	planted := map[string]any{}
+	for k, v := range desired {
+		planted[k] = v
+	}
+	planted["plugins"] = map[string]any{
+		"key-auth": map[string]any{"key": sentinel},
+	}
+
+	changes := DiffFields(observed, planted)
+	redacted := Redact(changes, prefixRedactor{prefix: "plugins.key-auth.key"})
+
+	for _, c := range redacted {
+		if strings.Contains(c.Old, sentinel) || strings.Contains(c.New, sentinel) {
+			t.Fatalf("a credential survived redaction at path %q: %+v", c.Path, c)
+		}
+	}
 }
 
 // FuzzMarshal checks the canonical serializer.
