@@ -1,6 +1,7 @@
 package resource
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -78,6 +79,14 @@ func Load(root string) (*Repo, error) {
 		return nil, fmt.Errorf("%s is not a directory", root)
 	}
 
+	// Resolve the root once, so a repository reached through a symlink is
+	// compared against its real location rather than reported as escaping
+	// itself.
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return nil, fmt.Errorf("resolving repository directory: %w", err)
+	}
+
 	repo := &Repo{Root: root}
 
 	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
@@ -105,6 +114,25 @@ func Load(root string) (*Repo, error) {
 
 		// The path comes from walking the directory the operator named. Reading
 		// operator-specified files is precisely this function's purpose.
+		// A symlink resolving outside the repository would let a file elsewhere
+		// on the filesystem be read as configuration. Anyone able to commit a
+		// symlink could then pull, say, a secrets file into a plan artifact —
+		// and plan artifacts are attached to pipeline runs. The same person
+		// could commit the content directly, so this is not a privilege
+		// boundary; it stops an unintended read of something that was never
+		// meant to be part of the repository.
+		if outside, checkErr := escapesRoot(realRoot, path); checkErr != nil {
+			repo.Errors = append(repo.Errors, LoadError{Path: path, Err: checkErr})
+			return nil
+		} else if outside {
+			repo.Errors = append(repo.Errors, LoadError{
+				Path: path,
+				Err: errors.New("resolves outside the repository directory; SixSync does not " +
+					"read files from outside the tree it was pointed at"),
+			})
+			return nil
+		}
+
 		data, readErr := os.ReadFile(path) //nolint:gosec // G304: intentional
 		if readErr != nil {
 			repo.Errors = append(repo.Errors, LoadError{Path: path, Err: readErr})
@@ -183,4 +211,22 @@ func WriteAtomic(path string, data []byte, perm os.FileMode) error {
 
 	tmpName = "" // renamed successfully; nothing to clean up
 	return nil
+}
+
+// escapesRoot reports whether a path resolves outside the repository root.
+//
+// Symlinks are resolved first, so a link pointing elsewhere is caught rather
+// than the link's own location being checked.
+func escapesRoot(realRoot, path string) (bool, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// A broken symlink resolves to nothing; "unreadable" describes that
+		// more accurately than "escapes".
+		return false, fmt.Errorf("cannot resolve: %w", err)
+	}
+	rel, err := filepath.Rel(realRoot, resolved)
+	if err != nil {
+		return true, nil
+	}
+	return rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)), nil
 }

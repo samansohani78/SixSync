@@ -579,3 +579,115 @@ func TestCallerDeadlineTakesPrecedenceWhenShorter(t *testing.T) {
 		t.Errorf("the caller's shorter deadline was ignored; took %s", elapsed)
 	}
 }
+
+// A hostile or broken endpoint must not be able to stall a pipeline
+// indefinitely by trickling bytes.
+func TestSlowResponseIsBoundedByTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			return
+		}
+		// Trickle forever without ever completing the document.
+		for i := 0; i < 10000; i++ {
+			if _, err := fmt.Fprint(w, `{"list":[`); err != nil {
+				return
+			}
+			flusher.Flush()
+			time.Sleep(10 * time.Millisecond)
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Options{BaseURL: srv.URL, APIKey: "k", Timeout: 300 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	if _, err := c.List(context.Background(), routeDef(t)); err == nil {
+		t.Fatal("a never-completing response was accepted")
+	}
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("a trickling response stalled the client for %s", elapsed)
+	}
+}
+
+// A response claiming an enormous body must not be read without bound.
+func TestOversizedResponseDoesNotExhaustMemory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		chunk := strings.Repeat("a", 1<<20)
+		for i := 0; i < 200; i++ { // 200 MiB, far over the cap
+			if _, err := fmt.Fprint(w, chunk); err != nil {
+				return
+			}
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Options{BaseURL: srv.URL, APIKey: "k", Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = c.List(context.Background(), routeDef(t))
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(60 * time.Second):
+		t.Fatal("reading an oversized response did not terminate")
+	}
+}
+
+// Cancelling mid-flight must stop the request rather than leaving it running.
+func TestCancellationDuringAListStopsPromptly(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-release
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+
+	c, err := New(Options{BaseURL: srv.URL, APIKey: "k", Timeout: 30 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	start := time.Now()
+	if _, err := c.List(ctx, routeDef(t)); err == nil {
+		t.Fatal("expected cancellation to surface as an error")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Errorf("cancellation took %s to take effect", elapsed)
+	}
+}
+
+// A malformed body must be reported, never panic.
+func TestMalformedResponsesNeverPanic(t *testing.T) {
+	bodies := []string{
+		"", "{", "[", "null", "0", `"a string"`, `{"list":[{"value":1}]}`,
+		`{"list":[{"value":{}}]}`, strings.Repeat(`{"a":`, 5000),
+	}
+	for i, body := range bodies {
+		t.Run(fmt.Sprintf("body%d", i), func(t *testing.T) {
+			c, _ := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, body)
+			}))
+			// The assertion is simply that this returns.
+			_, _ = c.List(context.Background(), routeDef(t))
+			_, _ = c.Get(context.Background(), routeDef(t), "x")
+		})
+	}
+}
