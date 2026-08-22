@@ -283,3 +283,36 @@ Recorded so they are not mistaken for established facts:
 - Behaviour on APISIX 3.16 and 3.17. Both are declared Tier 2 and untested here.
 - Pagination consistency under concurrent writes.
 - mTLS Admin API listener.
+
+---
+
+## Performance at scale
+
+Measured with `make test-perf`, which builds a synthetic repository of 5,000
+routes over 100 upstreams and 50 services — the shape of a gateway where
+reviewing configuration by hand has stopped being possible, which is the case
+SixSync exists for.
+
+| Operation | 5,000 resources | Allocated | Peak heap |
+| --- | --- | --- | --- |
+| Load from disk | 258 ms | 224 MiB | 11 MiB |
+| Lint | 6 ms | 3 MiB | 14 MiB |
+| Canonicalize + digest | 26 ms | 22 MiB | 14 MiB |
+| Plan (515 changes) | 138 ms | 112 MiB | 17 MiB |
+| Serialize the plan | 16 ms | 29 MiB | 9 MiB |
+
+The plan artifact for 5,000 resources is about 2.9 MiB.
+
+Measured on the development machine; treat the absolute numbers as indicative
+and the shape as the point. The tests assert generous ceilings — a minute for
+loading, two for planning — because they exist to catch an accidental
+quadratic, not to police milliseconds on unknown hardware.
+
+Total allocation exceeds peak heap by a wide margin, which is ordinary for a
+parse-and-discard workload: the garbage collector reclaims each file's
+intermediate representation as the next is read. No optimization has been
+applied, because profiling showed nothing worth optimizing.
+
+Determinism is asserted at scale as well as on small fixtures: map iteration
+disorder is far more likely to surface across thousands of entries than across
+three.

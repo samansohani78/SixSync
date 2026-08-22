@@ -99,6 +99,26 @@ test-integration:
 compat-matrix:
 	./scripts/compat-matrix.sh
 
+.PHONY: test-perf
+test-perf:
+	$(GO) test -tags perf -count=1 -timeout 20m ./test/perf/ -v -run TestScale
+
+.PHONY: bench
+bench:
+	$(GO) test -tags perf -bench . -benchmem -run "^$$" ./test/perf/
+
+.PHONY: fuzz
+fuzz:
+	@for pkg in canonical journal plan redact resource; do \
+		for target in $$($(GO) test ./internal/$$pkg/ -list 'Fuzz.*' 2>/dev/null | grep '^Fuzz' || true); do \
+			printf '  %-24s ' "$$target"; \
+			$(GO) test ./internal/$$pkg/ -run '^$$' -fuzz "^$$target$$" -fuzztime $(FUZZTIME) \
+				2>&1 | grep -E '^(ok|FAIL)' | tail -1; \
+		done; \
+	done
+
+FUZZTIME ?= 30s
+
 .PHONY: clean
 clean:
 	rm -rf dist coverage.out
