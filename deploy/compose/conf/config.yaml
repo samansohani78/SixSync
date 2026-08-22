@@ -1,11 +1,19 @@
 # Disposable local APISIX for SixSync integration tests.
 #
-# NOT A PRODUCTION CONFIGURATION. The keys below are published test values
-# with no secrecy whatsoever, and allow_admin is wide open. This stack is
-# expected to be reachable only from the local Docker network.
+# NOT A PRODUCTION CONFIGURATION. The keys below are published test values with
+# no secrecy whatsoever, and the admin allowlist is wide open. Every listener
+# binds to loopback.
+#
+# Ports come from the environment so one template serves every version under
+# test; APISIX expands ${{VAR}} itself.
 apisix:
-  node_listen: 9080
-  enable_admin: true
+  node_listen: ${{PROXY_PORT}}
+  # The control API binds a port of its own. Under host networking it must be
+  # parameterised too, or two versions cannot run side by side.
+  enable_control: true
+  control:
+    ip: 127.0.0.1
+    port: ${{CONTROL_PORT}}
 
 deployment:
   role: traditional
@@ -14,13 +22,12 @@ deployment:
 
   admin:
     allow_admin:
-      - 0.0.0.0/0
+      - 127.0.0.0/24
     admin_listen:
-      ip: 0.0.0.0
-      port: 9180
-    # Deliberately NOT setting admin_api_version, so that this stack exercises
-    # whatever the shipped default response format is. That is the behaviour
-    # real users get, and it is what SixSync must handle.
+      ip: 127.0.0.1
+      port: ${{ADMIN_PORT}}
+    # admin_api_version is deliberately unset, so the stack exercises whatever
+    # the shipped default response format is. That is what real users get.
     admin_key:
       - name: admin
         key: sixsync-test-admin-key-not-secret
@@ -31,6 +38,6 @@ deployment:
 
   etcd:
     host:
-      - "http://etcd:2379"
+      - "http://127.0.0.1:${{ETCD_PORT}}"
     prefix: /apisix
     timeout: 30

@@ -108,38 +108,73 @@ func (c *Client) Diagnose(ctx context.Context) Diagnosis {
 
 	// Step 2: determine capability without mutating anything.
 	//
-	// POST /apisix/admin/schema/validate/{kind} uses a write method but only
-	// validates its body against a JSON schema — it touches no stored state.
-	// APISIX checks the credential's role before dispatching, so a viewer key
-	// is refused with 401 "invalid method for role viewer" while an
-	// administrator key reaches the validator and gets a schema verdict.
+	// The probe is a DELETE against an identifier APISIX can never accept:
+	// it contains a space, and the id schema rejects that on write. No
+	// resource can therefore ever carry this identifier, so the request
+	// cannot destroy anything — confirmed against 3.16.0 and 3.18.0, both of
+	// which reject `PUT /routes/with%20space` with
+	// `property "id" validation failed`.
 	//
-	// That difference is what distinguishes the two, at zero risk.
-	err = c.ValidateSchema(ctx, routes, map[string]any{"uri": "/"})
+	// APISIX checks the credential's role before dispatching, so a viewer key
+	// is refused with 401 "invalid method for role viewer" and never reaches
+	// storage, while an administrator key reaches the handler and gets 404
+	// "Key not found" or a 400 for the malformed identifier. That difference
+	// is what distinguishes the two.
+	//
+	// An earlier version probed POST /apisix/admin/schema/validate/{kind}
+	// instead. That endpoint is not role-gated on APISIX 3.16.0 — a viewer key
+	// receives a schema verdict rather than 401 — so the probe reported every
+	// viewer key on 3.16 as an administrator. APISIX 3.17.0 began requiring
+	// the admin key there (#13328). The DELETE probe behaves identically on
+	// every supported version.
+	err = c.probeCapability(ctx, routes)
 	switch {
-	case err == nil:
-		// Reached the validator and the body passed.
-		d.Capability = CapabilityAdmin
-		d.SchemaValidationAvailable = true
-
-	case IsKind(err, ErrValidation):
-		// Also reached the validator; it simply rejected this body. Both
-		// outcomes prove the credential was allowed to use a write method.
-		d.Capability = CapabilityAdmin
-		d.SchemaValidationAvailable = true
-
 	case IsKind(err, ErrAuthInsufficient):
 		d.Capability = CapabilityReadOnly
-		// The endpoint exists; this key just may not use it.
-		d.SchemaValidationAvailable = true
-
-	case IsKind(err, ErrNotFound):
-		d.Problems = append(d.Problems,
-			"this endpoint has no schema validation API; `validate --remote` will not work")
-
+	case IsKind(err, ErrNotFound), IsKind(err, ErrValidation), err == nil:
+		// The request reached the handler, so this credential may use a write
+		// method. Nothing was deleted: the identifier cannot exist.
+		d.Capability = CapabilityAdmin
+	case IsKind(err, ErrAuthInvalid), IsKind(err, ErrAuthMissing):
+		d.Capability = CapabilityNone
+		d.Problems = append(d.Problems, "the API key was rejected when probing write capability")
 	default:
 		d.Problems = append(d.Problems, "could not determine key capability: "+err.Error())
 	}
 
+	// Step 3: report whether remote schema validation is usable, which
+	// `validate --remote` depends on. This is a separate question from write
+	// capability, because the endpoint is not role-gated on every version.
+	err = c.ValidateSchema(ctx, routes, map[string]any{"uri": "/"})
+	switch {
+	case err == nil, IsKind(err, ErrValidation):
+		d.SchemaValidationAvailable = true
+	case IsKind(err, ErrAuthInsufficient):
+		// The endpoint exists; this key may not use it.
+		d.SchemaValidationAvailable = true
+		d.Problems = append(d.Problems,
+			"this key cannot use remote schema validation, because APISIX exposes it "+
+				"only through a write method; `validate --remote` needs an administrator key")
+	case IsKind(err, ErrNotFound):
+		d.Problems = append(d.Problems,
+			"this endpoint has no schema validation API; `validate --remote` will not work")
+	default:
+		d.Problems = append(d.Problems, "could not reach schema validation: "+err.Error())
+	}
+
 	return d
+}
+
+// CapabilityProbeID is an identifier APISIX can never store.
+//
+// The space is the point: APISIX's id schema accepts only [a-zA-Z0-9._-], so a
+// resource with this identifier cannot be created through the Admin API, and a
+// DELETE against it cannot remove anything that exists.
+const CapabilityProbeID = "sixsync capability probe"
+
+// probeCapability issues the non-destructive write-method request described in
+// Diagnose and returns its classified error.
+func (c *Client) probeCapability(ctx context.Context, d model.Definition) error {
+	_, err := c.do(ctx, "DELETE", "/"+d.APIPath+"/"+url.PathEscape(CapabilityProbeID), nil, nil)
+	return err
 }

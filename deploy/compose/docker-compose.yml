@@ -1,37 +1,50 @@
 # Disposable APISIX stack for SixSync integration tests.
 #
-# Every image is pinned to an exact version. A floating tag such as `latest`
-# would make compatibility results meaningless: a green test run has to name
-# the exact APISIX build it was green against.
+# The APISIX version is chosen by APISIX_VERSION. Every image is pinned to an
+# exact version: a floating tag would make a green run meaningless, because it
+# would not say what it was green against.
+#
+# Host networking is used rather than published ports. Docker's port forwarding
+# goes through DNAT on the bridge, which some host firewall and VPN
+# configurations silently drop; host networking binds directly and is not
+# affected. Ports are parameterised so several versions can run side by side.
+#
+# NOT A PRODUCTION CONFIGURATION. The admin keys are published test values and
+# the admin allowlist is wide open. Everything binds to loopback only.
 services:
   etcd:
     image: quay.io/coreos/etcd:v3.5.33
-    container_name: sixsync-etcd
+    network_mode: host
     # Flags are passed explicitly rather than through ETCD_* environment
     # variables: with an overridden command the image does not reliably apply
-    # them, and etcd then binds to loopback only, which APISIX cannot reach.
+    # them, and etcd then binds somewhere APISIX cannot reach.
     command:
       - /usr/local/bin/etcd
       - --name=sixsync-etcd
       - --data-dir=/etcd-data
-      - --listen-client-urls=http://0.0.0.0:2379
-      - --advertise-client-urls=http://etcd:2379
+      - --listen-client-urls=http://127.0.0.1:${ETCD_PORT:-2379}
+      - --advertise-client-urls=http://127.0.0.1:${ETCD_PORT:-2379}
+      - --listen-peer-urls=http://127.0.0.1:${ETCD_PEER_PORT:-2380}
+      - --initial-advertise-peer-urls=http://127.0.0.1:${ETCD_PEER_PORT:-2380}
+      - --initial-cluster=sixsync-etcd=http://127.0.0.1:${ETCD_PEER_PORT:-2380}
     healthcheck:
-      test: ["CMD", "etcdctl", "endpoint", "health"]
+      test: ["CMD", "etcdctl", "--endpoints=http://127.0.0.1:${ETCD_PORT:-2379}", "endpoint", "health"]
       interval: 2s
       timeout: 3s
-      retries: 30
+      retries: 45
 
   apisix:
-    image: apache/apisix:3.18.0-debian
-    container_name: sixsync-apisix
+    image: apache/apisix:${APISIX_VERSION:-3.18.0}-debian
+    network_mode: host
     depends_on:
       etcd:
         condition: service_healthy
+    # APISIX substitutes ${{VAR}} in its own config file, so one template
+    # serves every version without generating a file per run.
+    environment:
+      ADMIN_PORT: ${ADMIN_PORT:-9180}
+      PROXY_PORT: ${PROXY_PORT:-9080}
+      ETCD_PORT: ${ETCD_PORT:-2379}
+      CONTROL_PORT: ${CONTROL_PORT:-9090}
     volumes:
       - ./conf/config.yaml:/usr/local/apisix/conf/config.yaml:ro
-    ports:
-      # Bound to loopback only: this stack has a wide-open admin allowlist and
-      # must never be reachable from outside this machine.
-      - "127.0.0.1:9180:9180"
-      - "127.0.0.1:9080:9080"

@@ -5,17 +5,78 @@ issuing requests against a disposable container and recording the response
 verbatim. Where reading the upstream documentation or source led to a different
 conclusion, the observation wins and the discrepancy is called out.
 
+## Support matrix
+
+| APISIX | Tier | Integration suite | Notes |
+| --- | --- | --- | --- |
+| **3.18.0** | 1 | **31/31 pass** | Primary development target |
+| **3.17.0** | 1 | **31/31 pass** | No behavioural differences found |
+| **3.16.0** | 2 | **31/31 pass** | Two documented differences, below |
+| ≤ 3.15 | — | not run | Unsupported: defaults were written back on write before 3.16, which changes canonicalization fundamentally |
+
+Reproduce with `make compat-matrix`, or `./scripts/compat-matrix.sh 3.17.0` for
+one version. Each version runs in its own Compose project on its own ports.
+
 ## Test environment
 
 | Component | Pinned version |
 | --- | --- |
-| APISIX | `apache/apisix:3.18.0-debian` |
+| APISIX | `apache/apisix:{3.16.0,3.17.0,3.18.0}-debian` |
 | etcd | `quay.io/coreos/etcd:v3.5.33` |
 | Deployment mode | traditional, `config_provider: etcd` |
-| `admin_api_version` | **not set** — i.e. whatever the shipped default is |
+| `admin_api_version` | **not set** — whatever the shipped default is |
 
-Reproduce with `deploy/compose/docker-compose.yml`. No production system was
-contacted at any point.
+The stack uses host networking rather than published ports. Docker's port
+forwarding goes through DNAT on the bridge, which some host firewall and VPN
+configurations silently drop; host networking binds directly and is unaffected.
+
+No production system was contacted at any point.
+
+---
+
+## Differences between supported versions
+
+Two, both on 3.16.0. They are encoded as version-aware expectations in
+`test/integration/compat_test.go` rather than smoothed over, so a change in
+either direction fails the suite.
+
+### 1. Schema validation is not role-gated on 3.16.0
+
+`POST /apisix/admin/schema/validate/{kind}` accepts a `role: viewer` key on
+3.16.0 and returns a schema verdict. APISIX 3.17.0 began requiring the admin key
+there (#13328), so the same request returns
+`401 invalid method for role viewer`.
+
+**Consequence for SixSync.** `doctor`'s capability probe must not use this
+endpoint, or every viewer key on 3.16.0 is reported as an administrator —
+precisely the wrong answer for an operator trying to run least-privilege. The
+probe instead issues a `DELETE` against an identifier APISIX can never store
+(it contains a space, which the id schema rejects), so the request cannot
+destroy anything, and the role check runs before dispatch on every version:
+
+| | 3.16.0 | 3.17.0 | 3.18.0 |
+| --- | --- | --- | --- |
+| viewer → `DELETE /routes/<id with space>` | 401 role | 401 role | 401 role |
+| admin → same | 404 Key not found | 404 | 404 |
+| viewer → `POST /schema/validate/routes` | **400 schema** | 401 role | 401 role |
+
+`validate --remote` therefore needs an administrator key on 3.17.0+, and works
+with a viewer key on 3.16.0. That is a difference in APISIX, not in SixSync.
+
+### 2. SSL private key material is returned on read by 3.16.0
+
+`GET /apisix/admin/ssls` (the list endpoint) on 3.16.0 returns the `key` field
+holding the private key **encrypted** under the `data_encryption` keyring.
+APISIX 3.17.0 strips it from both single and list responses (#13227).
+
+APISIX ships publicly-known default `data_encryption` keys, so unless an
+operator has replaced the keyring, that ciphertext should be treated as
+recoverable. This is worth knowing for anyone running 3.16.0 with a widely
+readable Admin API.
+
+**Consequence for SixSync.** None operationally: SSL is a refused kind on every
+version, so key material never reaches a resource file. The finding reinforces
+that refusal rather than changing it.
 
 ---
 
@@ -193,6 +254,23 @@ keyring. Since APISIX ships with publicly-known default keys, treat that
 ciphertext as sensitive. SixSync issues no PUTs today; this constrains M3.
 
 ---
+
+### Large numeric identifiers are lossy in APISIX itself
+
+A route referencing `upstream_id: 552218409505391294` as a JSON **number** is
+rejected on every supported version:
+
+```
+{"error_msg":"failed to fetch upstream info by upstream id [5.5221840950539e+17], response code: 404"}
+```
+
+APISIX passes the value through a float, losing precision above 2^53. The same
+digits as a **string** work correctly.
+
+This is an APISIX limitation, not a SixSync one. SixSync preserves such values
+exactly — it decodes with `json.Number` specifically so they are not corrupted —
+and `lint` warns when a reference is a long numeric literal, advising that it be
+quoted.
 
 ## Not yet verified
 

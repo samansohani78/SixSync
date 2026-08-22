@@ -55,9 +55,9 @@ logs (path-aware redaction). No other outbound connection exists.
 
 | APISIX | Tier | Status |
 | --- | --- | --- |
-| 3.18.x | 1 | Developed and integration-tested against 3.18.0 |
-| 3.17.x | 2 | Planned for M4; untested |
-| 3.16.x | 2 | Planned for M4; untested |
+| 3.18.0 | 1 | Integration suite passes, 31/31 |
+| 3.17.0 | 1 | Integration suite passes, 31/31 |
+| 3.16.0 | 2 | Integration suite passes, 31/31; two documented behavioural differences |
 | ≤ 3.15 | — | Not supported. Defaults were written back on write before 3.16, which changes canonicalization fundamentally |
 
 Compatibility is established by tests against pinned images, never by

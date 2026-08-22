@@ -17,6 +17,9 @@ type fakeAPISIX struct {
 	viewerKey string
 	// noSchemaEndpoint simulates a build without schema validation.
 	noSchemaEndpoint bool
+	// schemaValidateNotRoleGated models APISIX 3.16.0, where the schema
+	// validation endpoint does not enforce the viewer role.
+	schemaValidateNotRoleGated bool
 	// omitServerHeader simulates a proxy that strips Server.
 	omitServerHeader bool
 
@@ -34,8 +37,14 @@ func (f *fakeAPISIX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	isAdmin := key != "" && key == f.adminKey
 	isViewer := key != "" && key == f.viewerKey
 
-	// Anything that changes stored state would be a bug in doctor.
-	if r.Method != http.MethodGet && !strings.HasPrefix(r.URL.Path, "/apisix/admin/schema/validate/") {
+	// Anything that could change stored state would be a bug in doctor.
+	//
+	// The capability probe is a DELETE against an identifier APISIX can never
+	// store, so it is exempt: it cannot remove anything that exists.
+	// r.URL.Path is already percent-decoded, so match the identifier itself.
+	if r.Method != http.MethodGet &&
+		!strings.HasPrefix(r.URL.Path, "/apisix/admin/schema/validate/") &&
+		!strings.Contains(r.URL.Path, CapabilityProbeID) {
 		f.mutations++
 	}
 
@@ -50,13 +59,25 @@ func (f *fakeAPISIX) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The capability probe: a DELETE against an identifier that cannot exist.
+	if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, CapabilityProbeID) {
+		if isViewer {
+			w.WriteHeader(http.StatusUnauthorized)
+			fmt.Fprint(w, `{"error_msg":"failed to check token","description":"invalid method for role viewer"}`)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Key not found"}`)
+		return
+	}
+
 	if strings.HasPrefix(r.URL.Path, "/apisix/admin/schema/validate/") {
 		if f.noSchemaEndpoint {
 			w.WriteHeader(http.StatusNotFound)
 			fmt.Fprint(w, `{"message":"not found"}`)
 			return
 		}
-		if isViewer {
+		if isViewer && !f.schemaValidateNotRoleGated {
 			// APISIX checks the role before dispatching to the validator.
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"error_msg":"failed to check token","description":"invalid method for role viewer"}`)
@@ -217,5 +238,73 @@ func TestDiagnosisContainsNoCredential(t *testing.T) {
 	rendered := fmt.Sprintf("%+v", d)
 	if strings.Contains(rendered, secret) {
 		t.Errorf("the API key leaked into the diagnosis: %s", rendered)
+	}
+}
+
+// APISIX 3.16.0 does not enforce the viewer role on the schema validation
+// endpoint; 3.17.0 began requiring the admin key there (#13328). The capability
+// probe must not depend on that endpoint, or every viewer key on 3.16 is
+// reported as an administrator — which is exactly the mistake an operator
+// would act on when trying to run least-privilege.
+func TestDiagnoseIdentifiesViewerOnAPISIX316(t *testing.T) {
+	f := &fakeAPISIX{
+		adminKey: "admin-k", viewerKey: "viewer-k",
+		schemaValidateNotRoleGated: true, // 3.16.0 behaviour
+	}
+	d := diagnoseWith(t, f, "viewer-k")
+
+	if d.Capability != CapabilityReadOnly {
+		t.Errorf("Capability = %s, want %s; the probe must not rely on schema validation",
+			d.Capability, CapabilityReadOnly)
+	}
+	if f.mutations != 0 {
+		t.Errorf("doctor issued %d state-changing request(s)", f.mutations)
+	}
+}
+
+// The probe identifier must be one APISIX can never store, so the DELETE
+// cannot remove a real resource.
+func TestCapabilityProbeIdentifierCannotExist(t *testing.T) {
+	// APISIX's id schema is ^[a-zA-Z0-9-_.]+$ with length 1..64.
+	for _, r := range CapabilityProbeID {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			// An accepted character on its own is fine.
+		default:
+			return // at least one character APISIX rejects: the identifier is unstorable
+		}
+	}
+	t.Fatalf("CapabilityProbeID %q contains only characters APISIX accepts, so a resource "+
+		"could exist with that identifier and the probe could delete it", CapabilityProbeID)
+}
+
+// The probe is a DELETE. If it ever targeted a storable identifier, that would
+// be a destructive bug; assert the request shape explicitly.
+func TestCapabilityProbeTargetsOnlyTheUnstorableIdentifier(t *testing.T) {
+	var deletePaths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodDelete {
+			deletePaths = append(deletePaths, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			fmt.Fprint(w, `{"message":"Key not found"}`)
+			return
+		}
+		fmt.Fprint(w, `{"list":[],"total":0}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Options{BaseURL: srv.URL, APIKey: "k", Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.Diagnose(context.Background())
+
+	if len(deletePaths) != 1 {
+		t.Fatalf("expected exactly one DELETE, got %d: %v", len(deletePaths), deletePaths)
+	}
+	if !strings.Contains(deletePaths[0], CapabilityProbeID) {
+		t.Errorf("DELETE targeted %q, which is not the probe identifier", deletePaths[0])
 	}
 }

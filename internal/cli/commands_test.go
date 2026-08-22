@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/samansohani78/SixSync/internal/apisix"
 	"github.com/samansohani78/SixSync/internal/exitcode"
 )
 
@@ -53,6 +54,14 @@ func (f *fakeGateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if strings.HasPrefix(r.URL.Path, "/apisix/admin/schema/validate/") {
 		w.WriteHeader(http.StatusBadRequest)
 		fmt.Fprint(w, `{"error_msg":"object matches none of the required"}`)
+		return
+	}
+
+	// The capability probe is a DELETE against an identifier APISIX can never
+	// store, so it cannot change state and is not counted as a write.
+	if r.Method == http.MethodDelete && strings.Contains(r.URL.Path, apisix.CapabilityProbeID) {
+		w.WriteHeader(http.StatusNotFound)
+		fmt.Fprint(w, `{"message":"Key not found"}`)
 		return
 	}
 

@@ -61,29 +61,43 @@ vulncheck:
 # you care about: the stack has a wide-open admin allowlist and published keys.
 
 COMPOSE := docker compose -f deploy/compose/docker-compose.yml
+APISIX_VERSION ?= 3.18.0
+ADMIN_PORT ?= 9318
+PROXY_PORT ?= 9418
+ETCD_PORT ?= 2318
+ETCD_PEER_PORT ?= 2418
+CONTROL_PORT ?= 9018
+COMPOSE_ENV := APISIX_VERSION=$(APISIX_VERSION) ADMIN_PORT=$(ADMIN_PORT) \
+               PROXY_PORT=$(PROXY_PORT) ETCD_PORT=$(ETCD_PORT) ETCD_PEER_PORT=$(ETCD_PEER_PORT) \
+               CONTROL_PORT=$(CONTROL_PORT)
 
 .PHONY: env-up
 env-up:
-	$(COMPOSE) up -d
-	@echo "Waiting for the Admin API..."
+	$(COMPOSE_ENV) $(COMPOSE) up -d
+	@echo "Waiting for the Admin API on :$(ADMIN_PORT)..."
 	@for i in $$(seq 1 60); do \
 		if curl -sf -o /dev/null --max-time 2 \
 			-H "X-API-KEY: sixsync-test-admin-key-not-secret" \
-			http://127.0.0.1:9180/apisix/admin/routes; then \
+			http://127.0.0.1:$(ADMIN_PORT)/apisix/admin/routes; then \
 			echo "ready"; exit 0; \
 		fi; sleep 2; \
 	done; echo "timed out waiting for APISIX"; exit 1
 
 .PHONY: env-down
 env-down:
-	$(COMPOSE) down -v
+	$(COMPOSE_ENV) $(COMPOSE) down -v
 
 .PHONY: test-integration
 test-integration:
-	SIXSYNC_TEST_ADMIN_URL=http://127.0.0.1:9180 \
+	SIXSYNC_TEST_ADMIN_URL=http://127.0.0.1:$(ADMIN_PORT) \
+	SIXSYNC_TEST_APISIX_VERSION=$(APISIX_VERSION) \
 	SIXSYNC_TEST_ADMIN_KEY=sixsync-test-admin-key-not-secret \
 	SIXSYNC_TEST_VIEWER_KEY=sixsync-test-viewer-key-not-secret \
-	$(GO) test -tags integration ./test/integration/ -v
+	$(GO) test -tags integration -count=1 ./test/integration/ -v
+
+.PHONY: compat-matrix
+compat-matrix:
+	./scripts/compat-matrix.sh
 
 .PHONY: clean
 clean:
