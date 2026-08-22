@@ -107,7 +107,7 @@ func New(opts Options) (*Client, error) {
 		}
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.TLSClientConfig = tlsCfg
-		hc = &http.Client{Transport: transport}
+		hc = &http.Client{Transport: transport, CheckRedirect: refuseRedirect}
 	}
 
 	// A per-request deadline is applied via context in do() rather than
@@ -131,6 +131,22 @@ func New(opts Options) (*Client, error) {
 		timeout:   timeout,
 		http:      hc,
 	}, nil
+}
+
+// refuseRedirect stops the client from following any redirect.
+//
+// Go strips well-known credential headers on a cross-host redirect, but
+// X-API-KEY is a custom header and is not among them — so a redirect would
+// send the Admin API key to whatever host the Location names. That could come
+// from a compromised endpoint, a misconfigured proxy, or anyone able to inject
+// a response on a plaintext connection.
+//
+// The Admin API does not redirect. One arriving is anomalous, and the useful
+// response is to stop and say so rather than to follow it.
+func refuseRedirect(req *http.Request, via []*http.Request) error {
+	return fmt.Errorf("the endpoint returned a redirect to %s, which SixSync does not follow: "+
+		"the Admin API does not redirect, and following one would send the API key to that "+
+		"host. Point --admin-url at the Admin API directly", req.URL.Redacted())
 }
 
 // normalizeBaseURL validates the endpoint and strips any Admin API path

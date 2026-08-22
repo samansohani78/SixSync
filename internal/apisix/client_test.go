@@ -691,3 +691,67 @@ func TestMalformedResponsesNeverPanic(t *testing.T) {
 		})
 	}
 }
+
+// Go strips well-known credential headers on a cross-host redirect, but
+// X-API-KEY is custom and is not among them. Following a redirect would send
+// the Admin API key to whatever host the Location names.
+func TestRedirectsAreRefusedAndTheKeyIsNotForwarded(t *testing.T) {
+	var attackerSawKey string
+	attacker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attackerSawKey = r.Header.Get("X-API-KEY")
+		fmt.Fprint(w, `{"list":[],"total":0}`)
+	}))
+	t.Cleanup(attacker.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, attacker.URL+"/apisix/admin/routes", http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	c, err := New(Options{BaseURL: redirector.URL, APIKey: "super-secret-admin-key",
+		Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = c.List(context.Background(), routeDef(t))
+	if err == nil {
+		t.Fatal("a redirect was followed")
+	}
+	if attackerSawKey != "" {
+		t.Fatalf("the Admin API key was sent to the redirect target: %q", attackerSawKey)
+	}
+	if !strings.Contains(err.Error(), "redirect") {
+		t.Errorf("the error should explain what happened: %v", err)
+	}
+	// The error must not itself contain the key.
+	if strings.Contains(err.Error(), "super-secret-admin-key") {
+		t.Error("the API key leaked into the error message")
+	}
+}
+
+// A same-host redirect is refused too: the Admin API does not redirect, so one
+// arriving means something is in the path that should not be.
+func TestSameHostRedirectsAreAlsoRefused(t *testing.T) {
+	var hits int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits++
+		if hits == 1 {
+			http.Redirect(w, r, "/elsewhere", http.StatusMovedPermanently)
+			return
+		}
+		fmt.Fprint(w, `{"list":[],"total":0}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	c, err := New(Options{BaseURL: srv.URL, APIKey: "k", Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.List(context.Background(), routeDef(t)); err == nil {
+		t.Fatal("a same-host redirect was followed")
+	}
+	if hits != 1 {
+		t.Errorf("the client made %d requests; it should have stopped at the redirect", hits)
+	}
+}

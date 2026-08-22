@@ -74,14 +74,72 @@ machine-readable output.
 mTLS is supported through `--client-cert-file` and `--client-key-file`. On APISIX
 a client certificate is **additional** to the API key, never a replacement.
 
-## What this build cannot do
+## Redirects are refused
 
-No command changes remote state. Every Admin API request SixSync issues is
-either a `GET` or a `POST` to `/apisix/admin/schema/validate/{kind}`, which
-validates its request body and stores nothing.
+The client follows no redirects at all.
 
-`TestDiagnoseNeverMutates` asserts this for `doctor` by counting state-changing
-requests against a fake server and requiring zero, for every key type.
+Go strips well-known credential headers on a cross-host redirect, but
+`X-API-KEY` is a custom header and is not among them — so a redirect would send
+the Admin API key to whatever host the `Location` names. That could come from a
+compromised endpoint, a misconfigured proxy, or anyone able to inject a response
+on a plaintext connection.
+
+The Admin API does not redirect. One arriving is anomalous, and the useful
+response is to stop and say so.
+
+## Files outside the repository are not read
+
+A symlink in the repository resolving outside it is refused and reported.
+Anyone able to commit a symlink could otherwise pull an external file — a
+secrets file, say — into a plan artifact, and plan artifacts are attached to
+pipeline runs.
+
+This is not a privilege boundary: the same person could commit the content
+directly. It stops an unintended read of something never meant to be part of
+the repository. Symlinks within the repository still work.
+
+## What changes remote state, and what it takes
+
+Only `apply` and `rollback`. Everything else issues reads, plus the schema
+validation endpoint, which validates its request body and stores nothing.
+
+`apply` requires all of:
+
+- an explicit `--approve`, and `--approve-delete` on top for any deletion
+- a plan whose digest matches its content
+- a plan built for this gateway, with this credential
+- every affected resource still at the revision the plan recorded
+
+Any of those failing stops the run before the first write.
+
+`TestDiagnoseNeverMutates` and `TestReadOnlyCommandsIssueNoWrites` assert the
+read-only commands stay that way by counting state-changing requests against a
+fake gateway and requiring zero, for every key type.
+
+## Writes are narrow by construction
+
+Only `PUT` to a chosen identifier. Not `POST`, which would let the gateway
+choose identity; not `PATCH`, which merges maps rather than replacing them, so
+the result would depend on prior state instead of on the file.
+
+`?force=true` is never sent on a delete. It bypasses APISIX's own reference
+checks, which are one of the few protections below SixSync.
+
+Nothing is retried. A write whose response was lost may or may not have been
+applied, and repeating it could overwrite a concurrent change; the outcome is
+recorded as `uncertain` and the run stops.
+
+## The journal, and what rollback cannot do
+
+Prior state is recorded redacted, so a journal kept as a CI artifact is not
+where credentials end up. The consequence is deliberate: rollback cannot
+restore a secret it was never given, and reports that as a manual step rather
+than writing a placeholder into the gateway — which would replace a working
+credential with the literal string `[REDACTED]` and break authentication in a
+way that looks like a configuration change.
+
+A redaction placeholder appearing in a resource file is refused on write for
+the same reason.
 
 ## Least privilege
 

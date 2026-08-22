@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/samansohani78/SixSync/internal/apisix"
 	"github.com/samansohani78/SixSync/internal/canonical"
@@ -474,8 +475,28 @@ func TestCompatForceDeleteBypassesReferenceCheck(t *testing.T) {
 		rawAdmin(t, "DELETE", "/apisix/admin/upstreams/compat-force-up?force=true", "")
 	})
 
-	if code, _, _ := rawAdmin(t, "DELETE", "/apisix/admin/upstreams/compat-force-up", ""); code != 400 {
-		t.Errorf("expected the reference check to refuse, got HTTP %d", code)
+	// APISIX's delete checker reads routes from a cache fed by an etcd watch,
+	// so a route created moments earlier is not necessarily visible to it yet.
+	// Wait for the check to converge rather than racing it — the delay is a
+	// real property of the gateway, not a flaw in the test.
+	//
+	// This is also why SixSync does its own dependency analysis: the
+	// server-side check is a backstop that can be a beat behind.
+	var refused bool
+	for i := 0; i < 50; i++ {
+		if code, _, _ := rawAdmin(t, "DELETE", "/apisix/admin/upstreams/compat-force-up", ""); code == 400 {
+			refused = true
+			break
+		}
+		// The delete may have succeeded because the checker had not caught up;
+		// recreate and try again.
+		rawAdmin(t, "PUT", "/apisix/admin/upstreams/compat-force-up",
+			`{"type":"roundrobin","nodes":{"10.30.0.3:80":1}}`)
+		time.Sleep(100 * time.Millisecond)
+	}
+	if !refused {
+		t.Fatalf("APISIX %s never refused to delete a referenced upstream, even after waiting "+
+			"5s for its reference check to converge", testVersion(t))
 	}
 	code, _, body := rawAdmin(t, "DELETE", "/apisix/admin/upstreams/compat-force-up?force=true", "")
 	if code != 200 {

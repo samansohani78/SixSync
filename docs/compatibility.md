@@ -316,3 +316,20 @@ applied, because profiling showed nothing worth optimizing.
 Determinism is asserted at scale as well as on small fixtures: map iteration
 disorder is far more likely to surface across thousands of entries than across
 three.
+
+---
+
+## APISIX's reference check is not immediately consistent
+
+`delete_checker` reads referencing resources from a cache fed by an etcd watch,
+so a route created moments earlier is not necessarily visible to it yet. A
+delete issued in that window succeeds even though the reference exists.
+
+Observed on 3.17.0 while creating an upstream and a referring route back to
+back, then immediately deleting the upstream: the deletion was accepted. Waiting
+for the watch to catch up makes the refusal appear.
+
+This is worth knowing for two reasons. It is why the integration test waits for
+convergence rather than racing the gateway. And it is a concrete reason SixSync
+does its own dependency analysis rather than relying on the server-side check:
+that check is a backstop, and it can be a beat behind.
