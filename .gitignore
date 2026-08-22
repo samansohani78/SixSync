@@ -1,0 +1,25 @@
+# Vendored upstream reference material — kept locally for offline research,
+# never published. See docs/research.md for provenance.
+/third_party/apisix-docs-3.18.0/
+
+# Build output
+/dist/
+/bin/
+/sixsync
+
+# Go
+*.test
+*.out
+/coverage.txt
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local configuration that may hold credentials.
+# Never commit a real Admin API key.
+/sixsync.local.yaml
+*.local.yaml
+.env

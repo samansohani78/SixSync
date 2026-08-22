@@ -1,0 +1,9 @@
+apiVersion: sixsync/v1alpha1
+kind: Route
+metadata:
+  id: dup-route
+lifecycle:
+  state: present
+spec:
+  uri: /b
+  upstream_id: known-upstream

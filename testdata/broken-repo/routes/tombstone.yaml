@@ -1,0 +1,6 @@
+apiVersion: sixsync/v1alpha1
+kind: Route
+metadata:
+  id: retired-route
+lifecycle:
+  state: absent

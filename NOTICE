@@ -1,0 +1,33 @@
+SixSync
+Copyright 2026 The SixSync Authors
+
+This product is licensed under the Apache License, Version 2.0.
+See the LICENSE file for the full license text.
+
+--------------------------------------------------------------------------
+Trademark notice
+--------------------------------------------------------------------------
+
+SixSync is an independent, community-maintained project. It is NOT
+affiliated with, endorsed by, or sponsored by the Apache Software
+Foundation (ASF).
+
+Apache, Apache APISIX, and APISIX are trademarks of the Apache Software
+Foundation. SixSync uses these names solely to describe what the software
+interoperates with (nominative use), as permitted by the ASF trademark
+policy at https://www.apache.org/foundation/marks/.
+
+SixSync does not use the Apache APISIX graphic logo, does not use "APISIX"
+as part of its product name, and does not use "apisix" as a second-level
+domain name.
+
+--------------------------------------------------------------------------
+Third-party material
+--------------------------------------------------------------------------
+
+This repository does not redistribute Apache APISIX source or
+documentation. A local copy of the Apache APISIX 3.18.0 documentation may
+be present under third_party/ during development for offline reference; it
+is excluded from version control by .gitignore and is never published as
+part of this project. That material is Copyright The Apache Software
+Foundation, licensed under the Apache License, Version 2.0.

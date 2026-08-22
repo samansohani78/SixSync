@@ -1,0 +1,10 @@
+apiVersion: sixsync/v1alpha1
+kind: Upstream
+metadata:
+  id: known-upstream
+lifecycle:
+  state: present
+spec:
+  type: roundrobin
+  nodes:
+    10.0.0.1:8080: 1

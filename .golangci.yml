@@ -1,0 +1,55 @@
+# golangci-lint configuration for SixSync.
+#
+# The selection favours correctness and security checks over style opinions:
+# a linter that argues about formatting trains people to skim its output.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  enable:
+    - errcheck      # an ignored error is how partial failures become silent
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose     # a leaked response body exhausts connections over time
+    - gosec         # this tool handles credentials and TLS configuration
+    - misspell
+    - unconvert
+    - errorlint     # errors.As/Is correctness; the exit-code contract needs it
+    - noctx         # every outbound request must be cancellable
+
+  settings:
+    errcheck:
+      # Writes to stdout/stderr. A failure here means the stream is already
+      # gone (closed pipe, full disk); there is no useful recovery, and
+      # checking each one would bury the errors that do matter.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    gosec:
+      excludes:
+        # InsecureSkipVerify is a documented, warned-about opt-in.
+        - G402
+    staticcheck:
+      checks: ["all"]
+
+  exclusions:
+    rules:
+      # Test files legitimately ignore errors on setup helpers and use weak
+      # randomness or fixed credentials in fixtures.
+      - path: _test\.go
+        linters:
+          - errcheck
+          - gosec
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

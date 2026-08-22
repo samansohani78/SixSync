@@ -1,0 +1,124 @@
+# Example GitLab CI/CD pipeline for a repository of SixSync resource files.
+#
+# This is documentation, not part of SixSync itself. SixSync is CI-neutral: it
+# is a single binary with documented exit codes and needs nothing from GitLab.
+#
+# It deliberately contains no deployment job. This build of SixSync is
+# read-only, and publishing an apply job before the tool can apply anything
+# would invite someone to wire up production access it cannot yet use safely.
+#
+# Vault is not used. Credentials come from GitLab CI/CD variables.
+#
+# ---------------------------------------------------------------------------
+# Variables to configure in Settings > CI/CD > Variables
+# ---------------------------------------------------------------------------
+#
+#   SIXSYNC_ADMIN_URL          the Admin API endpoint
+#
+#   SIXSYNC_VIEWER_KEY         an APISIX key with `role: viewer`
+#                              Masked. Used by every job in this file.
+#
+#   SIXSYNC_ADMIN_KEY          an APISIX key with `role: admin`
+#                              Masked AND Protected, so it is exposed only to
+#                              protected branches and tags. Not used here;
+#                              listed so the split is set up before it is
+#                              needed.
+#
+# Mark both keys Masked so they are filtered out of job logs, and Protected on
+# the administrator key so an unprivileged branch cannot reach it. Where your
+# GitLab version offers "Hidden", set it on both: masking only redacts a value
+# from logs, it does not stop a job printing it deliberately.
+#
+# Never enable `set -x` in a job that handles these values.
+
+stages:
+  - validate
+  - verify
+
+default:
+  image: golang:1.27
+  before_script:
+    - go install github.com/samansohani78/SixSync/cmd/sixsync@latest
+
+# ---------------------------------------------------------------------------
+# Runs on every merge request. Needs no endpoint and no credential, so it is
+# safe for a fork-originated contribution.
+# ---------------------------------------------------------------------------
+lint:
+  stage: validate
+  script:
+    - sixsync lint --repo-dir .
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# Validates against the gateway's own schemas.
+#
+# NOTE: APISIX exposes schema validation only through POST, and refuses any
+# non-GET method to a `role: viewer` key. Remote validation therefore needs a
+# key that may write, even though the endpoint changes nothing. If that trade
+# is unacceptable, drop this job and rely on `lint` plus `drift`.
+# ---------------------------------------------------------------------------
+validate-remote:
+  stage: validate
+  variables:
+    SIXSYNC_ADMIN_URL: $SIXSYNC_ADMIN_URL
+    SIXSYNC_ADMIN_KEY: $SIXSYNC_ADMIN_KEY
+  script:
+    - sixsync validate --repo-dir . --remote
+  rules:
+    # Only on protected refs, because it needs the administrator key.
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
+      when: manual
+      allow_failure: true
+
+# ---------------------------------------------------------------------------
+# Reports where the gateway and the repository disagree. Read-only, and uses
+# the viewer key.
+#
+# Exit code 2 means differences were found. `allow_failure` with that exit code
+# surfaces drift as a warning rather than a broken pipeline: drift is
+# information, not a build error.
+# ---------------------------------------------------------------------------
+drift:
+  stage: verify
+  variables:
+    SIXSYNC_ADMIN_URL: $SIXSYNC_ADMIN_URL
+    SIXSYNC_ADMIN_KEY: $SIXSYNC_VIEWER_KEY
+  script:
+    - sixsync doctor
+    - sixsync drift --repo-dir . --detailed-exitcode --output json | tee drift.json
+  allow_failure:
+    exit_codes:
+      - 2
+  artifacts:
+    when: always
+    paths:
+      - drift.json
+    expire_in: 30 days
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+# ---------------------------------------------------------------------------
+# Scheduled drift detection. Add a pipeline schedule in the GitLab UI.
+# ---------------------------------------------------------------------------
+scheduled-drift:
+  extends: drift
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+
+# ---------------------------------------------------------------------------
+# When SixSync gains an apply command, the deployment job belongs here and
+# should carry all of:
+#
+#   environment:
+#     name: production          # a Protected Environment with approvers
+#   resource_group: production  # serializes deploys so two cannot interleave
+#   when: manual                # a human decides
+#   rules:
+#     - if: $CI_COMMIT_REF_PROTECTED == "true"
+#
+# plus the administrator key rather than the viewer key, and a runner that is
+# protected and locked to this project.
+# ---------------------------------------------------------------------------

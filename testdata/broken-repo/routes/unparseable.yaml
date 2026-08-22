@@ -1,0 +1,9 @@
+apiVersion: sixsync/v1alpha1
+kind: Route
+metadata:
+  id: broken
+lifecycle:
+  state: present
+spec:
+  uri: /x
+  this is not: [valid yaml
