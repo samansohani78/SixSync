@@ -81,8 +81,10 @@ func TestDiffFieldsHandlesListLengthChanges(t *testing.T) {
 	if len(got) != 1 || got[0].Type != ChangeRemoved {
 		t.Fatalf("expected one removal, got %v", got)
 	}
-	if got[0].Path != "nodes[1]" {
-		t.Errorf("path = %q", got[0].Path)
+	// The removed element is descended into, so every value has a path the
+	// redactor can recognise.
+	if got[0].Path != "nodes[1].host" {
+		t.Errorf("path = %q, want nodes[1].host", got[0].Path)
 	}
 }
 
@@ -201,5 +203,82 @@ func TestRedactDoesNotInventValues(t *testing.T) {
 	}
 	if got[0].New != "[REDACTED]" {
 		t.Errorf("New was not redacted: %+v", got[0])
+	}
+}
+
+// Rendering an added subtree as a single value would defeat path-based
+// redaction: a credential nested inside it would be serialized into the change
+// for its parent, a path no secret rule matches, and would then appear in the
+// plan artifact and in CI logs.
+//
+// This is a regression test for a real leak.
+func TestAddedSubtreesAreDescendedSoSecretsRemainRedactable(t *testing.T) {
+	desired := mustCanon(t, "Route", `{
+		"uri":"/pay",
+		"plugins":{"key-auth":{"key":"a-real-credential"},"cors":{}}
+	}`)
+
+	// A create diffs against nothing.
+	changes := DiffFields(nil, desired)
+
+	var sawLeaf bool
+	for _, c := range changes {
+		if c.Path == "plugins.key-auth.key" {
+			sawLeaf = true
+		}
+		// No change may carry the credential at a path that is not the
+		// credential's own, or redaction cannot reach it.
+		if strings.Contains(c.New, "a-real-credential") && c.Path != "plugins.key-auth.key" {
+			t.Errorf("the credential appears at path %q, where redaction cannot match it: %+v",
+				c.Path, c)
+		}
+	}
+	if !sawLeaf {
+		t.Fatalf("expected a leaf change at plugins.key-auth.key, got %+v", changes)
+	}
+
+	// With redaction applied, the value must be gone entirely.
+	got := Redact(changes, prefixRedactor{prefix: "plugins.key-auth.key"})
+	for _, c := range got {
+		if strings.Contains(c.Old, "a-real-credential") || strings.Contains(c.New, "a-real-credential") {
+			t.Errorf("the credential survived redaction at %q: %+v", c.Path, c)
+		}
+	}
+}
+
+// An empty map is meaningful in APISIX — `plugins: {cors: {}}` enables a plugin
+// with no configuration — so it must not be dropped when descending.
+func TestEmptyCompositesAreStillReported(t *testing.T) {
+	desired := mustCanon(t, "Route", `{"plugins":{"cors":{}},"tags":[]}`)
+	changes := DiffFields(nil, desired)
+
+	paths := map[string]string{}
+	for _, c := range changes {
+		paths[c.Path] = c.New
+	}
+	if paths["plugins.cors"] != "{}" {
+		t.Errorf("an empty plugin block was not reported: %+v", changes)
+	}
+	if paths["tags"] != "[]" {
+		t.Errorf("an empty list was not reported: %+v", changes)
+	}
+}
+
+// Removed subtrees need the same treatment: a credential being removed must not
+// be printed on its way out.
+func TestRemovedSubtreesAreDescended(t *testing.T) {
+	observed := mustCanon(t, "Route", `{"plugins":{"key-auth":{"key":"old-credential"}}}`)
+	changes := DiffFields(observed, mustCanon(t, "Route", `{}`))
+
+	for _, c := range changes {
+		if strings.Contains(c.Old, "old-credential") && c.Path != "plugins.key-auth.key" {
+			t.Errorf("the removed credential appears at %q: %+v", c.Path, c)
+		}
+	}
+	got := Redact(changes, prefixRedactor{prefix: "plugins.key-auth.key"})
+	for _, c := range got {
+		if strings.Contains(c.Old, "old-credential") {
+			t.Errorf("a removed credential survived redaction: %+v", c)
+		}
 	}
 }

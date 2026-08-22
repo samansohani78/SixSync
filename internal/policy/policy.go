@@ -51,8 +51,9 @@ const (
 	RuleProtectedResources  = "protected-resources"
 	RuleNoEmbeddedLua       = "no-embedded-lua"
 	RuleDeleteNeedsApproval = "delete-requires-approval"
-	RuleNoPlaintextSecrets  = "no-plaintext-secrets"
-	RuleRequireLabels       = "require-labels"
+	// This is a rule identifier, not a credential, despite the name.
+	RuleNoPlaintextSecrets = "no-plaintext-secrets" //nolint:gosec // G101: rule name
+	RuleRequireLabels      = "require-labels"
 )
 
 // Violation is one rule firing against one subject.

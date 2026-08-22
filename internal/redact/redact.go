@@ -58,6 +58,13 @@ func NewPolicy(paths []string, names []string) *Policy {
 	return p
 }
 
+// MatchesPath reports whether a field at the given path is sensitive.
+//
+// Exported so that callers holding a path they derived themselves — a diff
+// renderer, for example — can consult the same policy that Apply uses, rather
+// than reimplementing the matching and drifting from it.
+func (p *Policy) MatchesPath(path []string) bool { return p.matches(path) }
+
 // matches reports whether a field at the given path is sensitive.
 func (p *Policy) matches(path []string) bool {
 	if p == nil || len(path) == 0 {

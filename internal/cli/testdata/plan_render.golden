@@ -1,0 +1,17 @@
+Plan for <endpoint>
+Digest: <digest>
+
+update  Route          pay-export                   routes/changed.yaml
+         ~ uri: /v1/export -> /v1/export-v2
+create  Route          r-new                        routes/new.yaml
+         + upstream_id = payments-backend
+         + uri = /new
+
+1 to create, 1 to update, 0 to delete, 0 unchanged.
+
+1 resource(s) on the gateway are not described by any file:
+  Upstream/payments-backend
+SixSync never treats an undescribed resource as a reason to delete anything.
+
+Nothing was changed. This is a plan.
+

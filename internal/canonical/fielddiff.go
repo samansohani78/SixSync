@@ -69,13 +69,9 @@ func diffValue(path []string, observed, desired any, out *[]FieldChange) {
 
 			switch {
 			case oHas && !dHas:
-				*out = append(*out, FieldChange{
-					Path: joinPath(child), Type: ChangeRemoved, Old: render(ov),
-				})
+				emitLeaves(child, ov, ChangeRemoved, out)
 			case !oHas && dHas:
-				*out = append(*out, FieldChange{
-					Path: joinPath(child), Type: ChangeAdded, New: render(dv),
-				})
+				emitLeaves(child, dv, ChangeAdded, out)
 			default:
 				diffValue(child, ov, dv, out)
 			}
@@ -95,13 +91,9 @@ func diffValue(path []string, observed, desired any, out *[]FieldChange) {
 			child := append(append([]string{}, path...), "["+strconv.Itoa(i)+"]")
 			switch {
 			case i >= len(dList):
-				*out = append(*out, FieldChange{
-					Path: joinPath(child), Type: ChangeRemoved, Old: render(oList[i]),
-				})
+				emitLeaves(child, oList[i], ChangeRemoved, out)
 			case i >= len(oList):
-				*out = append(*out, FieldChange{
-					Path: joinPath(child), Type: ChangeAdded, New: render(dList[i]),
-				})
+				emitLeaves(child, dList[i], ChangeAdded, out)
 			default:
 				diffValue(child, oList[i], dList[i], out)
 			}
@@ -115,6 +107,59 @@ func diffValue(path []string, observed, desired any, out *[]FieldChange) {
 			Old: render(observed), New: render(desired),
 		})
 	}
+}
+
+// emitLeaves records an added or removed value as one change per leaf field.
+//
+// Rendering a whole subtree as a single value would defeat path-based
+// redaction: a credential nested inside an added `plugins` block would be
+// serialized into the change for `plugins`, a path no secret rule matches, and
+// would then appear verbatim in the plan artifact and in CI logs. Descending to
+// leaves gives every value a path the redactor can recognise.
+//
+// It also makes the diff more readable, which is the same reason a reviewer
+// wants it.
+func emitLeaves(path []string, v any, kind ChangeType, out *[]FieldChange) {
+	switch t := v.(type) {
+	case map[string]any:
+		if len(t) == 0 {
+			// An empty map is meaningful — `plugins: {cors: {}}` enables a
+			// plugin with no configuration — so record it rather than dropping it.
+			appendLeaf(path, "{}", kind, out)
+			return
+		}
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			emitLeaves(append(append([]string{}, path...), k), t[k], kind, out)
+		}
+
+	case []any:
+		if len(t) == 0 {
+			appendLeaf(path, "[]", kind, out)
+			return
+		}
+		for i, item := range t {
+			emitLeaves(append(append([]string{}, path...), "["+strconv.Itoa(i)+"]"),
+				item, kind, out)
+		}
+
+	default:
+		appendLeaf(path, render(v), kind, out)
+	}
+}
+
+func appendLeaf(path []string, rendered string, kind ChangeType, out *[]FieldChange) {
+	c := FieldChange{Path: joinPath(path), Type: kind}
+	if kind == ChangeRemoved {
+		c.Old = rendered
+	} else {
+		c.New = rendered
+	}
+	*out = append(*out, c)
 }
 
 // joinPath renders a path, keeping list indices attached to their parent rather

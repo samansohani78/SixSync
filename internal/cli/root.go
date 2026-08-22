@@ -12,6 +12,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -25,12 +26,24 @@ type env struct {
 	out io.Writer
 	err io.Writer
 
+	// clock supplies the current time. Tests replace it so that a plan's
+	// runtime metadata is reproducible; nothing else depends on it.
+	clock func() time.Time
+
 	// configPath is the --config flag.
 	configPath string
 
 	// cmd is retained so commands can read which flags were actually set.
 	// A flag the user did not set must not mask the environment or the file.
 	cmd *cobra.Command
+}
+
+// now returns the current time, via the injectable clock.
+func (e *env) now() time.Time {
+	if e.clock != nil {
+		return e.clock()
+	}
+	return time.Now().UTC()
 }
 
 // resolveConfig merges the configuration sources, passing on only those flags
@@ -109,6 +122,7 @@ func NewRootCommand(out, errOut io.Writer) *cobra.Command {
 		newDriftCommand(e),
 		newLintCommand(e),
 		newValidateCommand(e),
+		newPlanCommand(e),
 	)
 	return root
 }

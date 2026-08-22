@@ -2,6 +2,7 @@ package depgraph
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -82,8 +83,11 @@ func TestCycleIsDetectedAndNamed(t *testing.T) {
 		t.Fatal("expected a cycle error")
 	}
 	var ce *CycleError
-	if !asCycleError(err, &ce) {
+	if !errors.As(err, &ce) {
 		t.Fatalf("error is not a CycleError: %v", err)
+	}
+	if len(ce.Cycle) == 0 {
+		t.Error("CycleError carries no cycle path")
 	}
 	// Naming the cycle is the point: "a cycle exists" is not actionable.
 	msg := err.Error()
@@ -92,14 +96,6 @@ func TestCycleIsDetectedAndNamed(t *testing.T) {
 			t.Errorf("cycle error does not name %s: %s", want, msg)
 		}
 	}
-}
-
-func asCycleError(err error, target **CycleError) bool {
-	if ce, ok := err.(*CycleError); ok {
-		*target = ce
-		return true
-	}
-	return false
 }
 
 func TestSelfReferenceIsACycle(t *testing.T) {

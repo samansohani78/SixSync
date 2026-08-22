@@ -204,3 +204,34 @@ func TestLooksSecret(t *testing.T) {
 		})
 	}
 }
+
+// MatchesPath must agree with Apply, or a diff renderer consulting it would
+// redact a different set of fields than the value redactor does.
+func TestMatchesPathAgreesWithApply(t *testing.T) {
+	p := testPolicy()
+
+	cases := []struct {
+		path []string
+		want bool
+	}{
+		{[]string{"ssl", "key"}, true},
+		{[]string{"plugins", "basic-auth", "password"}, true},
+		{[]string{"plugins", "key-auth", "key"}, true},
+		{[]string{"a", "b", "authorization"}, true},
+		{[]string{"upstream", "key"}, false},
+		{[]string{"uri"}, false},
+		{[]string{"ssl", "cert"}, false},
+	}
+	for _, tc := range cases {
+		if got := p.MatchesPath(tc.path); got != tc.want {
+			t.Errorf("MatchesPath(%v) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestMatchesPathOnNilPolicy(t *testing.T) {
+	var p *Policy
+	if p.MatchesPath([]string{"password"}) {
+		t.Error("a nil policy must match nothing")
+	}
+}
