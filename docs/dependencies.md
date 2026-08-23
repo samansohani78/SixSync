@@ -9,7 +9,7 @@ this project's security problem.
 | --- | --- | --- | --- |
 | `github.com/goccy/go-yaml` | v1.19.2 | MIT | YAML with strict decoding |
 | `github.com/spf13/cobra` | v1.10.2 | Apache-2.0 | Command tree |
-| `github.com/spf13/pflag` | v1.0.9 | BSD-3-Clause | Flag parsing, required by cobra |
+| `github.com/spf13/pflag` | v1.0.10 | BSD-3-Clause | Flag parsing, required by cobra |
 | `github.com/inconshreveable/mousetrap` | v1.1.0 | Apache-2.0 | Windows support, required by cobra |
 
 All four are compatible with Apache-2.0, this project's licence.
